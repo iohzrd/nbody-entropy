@@ -145,7 +145,7 @@ cargo run --release --features gpu -- gpu-stream | dieharder -a -g 200
 This is an **experimental project**:
 
 1. **Not cryptographically proven** - Needs formal analysis
-2. **Deterministic** - Same seed produces same sequence
+2. **Non-deterministic on GPU** - Parallel floating point operations may vary between runs (actually a feature for entropy)
 3. **Requires GPU** - For practical speeds
 
 ## How It Differs From Other Chaos PRNGs
