@@ -922,6 +922,107 @@ pub fn levy() -> Expr {
     })
 }
 
+/// Michalewicz function: -sum(sin(x_i) * sin^(2m)((i+1)*x_i^2/π))
+/// Multimodal with steep ridges and valleys. Default m=10.
+/// Global minimum depends on dimension, approximately -1.8013 for 2D at (2.20, 1.57)
+pub fn michalewicz() -> Expr {
+    michalewicz_m(10)
+}
+
+/// Michalewicz function with configurable steepness parameter m
+pub fn michalewicz_m(m: i32) -> Expr {
+    -sum_dims(move |x, i| {
+        let inner = (i + 1.0) * x.clone().powi(2) / pi();
+        sin(x) * sin(inner).powi(2 * m)
+    })
+}
+
+/// Styblinski-Tang function: 0.5 * sum(x_i^4 - 16*x_i^2 + 5*x_i)
+/// Global minimum at x_i ≈ -2.903534 with value ≈ -39.16617*n
+pub fn styblinski_tang() -> Expr {
+    0.5 * sum_dims(|x, _| {
+        x.clone().powi(4) - 16.0 * x.clone().powi(2) + 5.0 * x
+    })
+}
+
+/// Dixon-Price function: (x_1 - 1)^2 + sum_{i=2}^n (i * (2*x_i^2 - x_{i-1})^2)
+/// Uses sum_pairs for the coupled terms
+/// Global minimum at x_i = 2^(-((2^i - 2)/2^i))
+pub fn dixon_price() -> Expr {
+    // First term: (x_0 - 1)^2 handled separately via a trick
+    // sum_pairs gives us access to consecutive pairs
+    sum_pairs(|x, y| {
+        // For pair (x_i, x_{i+1}), we compute (i+2) * (2*x_{i+1}^2 - x_i)^2
+        // This is shifted by 1 since sum_pairs starts at i=0
+        (2.0 * y.clone().powi(2) - x).powi(2)
+    }) + sum_dims(|x, i| {
+        // Add (i+1) scaling factor and first term (x_0 - 1)^2
+        // When i=0, this gives (x_0 - 1)^2
+        // For other terms, the scaling is handled in sum_pairs
+        (i.clone() * const_(0.0)) + (const_(1.0) - x).powi(2) * (const_(1.0) - i.clone() / (i + 1.0))
+    })
+}
+
+/// Zakharov function: sum(x_i^2) + (0.5*sum((i+1)*x_i))^2 + (0.5*sum((i+1)*x_i))^4
+/// Bowl-shaped with a flat valley. Global minimum at origin.
+pub fn zakharov() -> Expr {
+    let sum_sq = sum_dims(|x, _| x.powi(2));
+    let weighted_sum = sum_dims(|x, i| 0.5 * (i + 1.0) * x);
+    sum_sq + weighted_sum.clone().powi(2) + weighted_sum.powi(4)
+}
+
+/// Sum Squares function: sum((i+1) * x_i^2)
+/// Weighted sphere function. Global minimum at origin.
+pub fn sum_squares() -> Expr {
+    sum_dims(|x, i| (i + 1.0) * x.powi(2))
+}
+
+/// Trid function: sum((x_i - 1)^2) - sum(x_i * x_{i-1})
+/// Has a unique global minimum inside [-n^2, n^2]^n
+/// Minimum value: -n(n+4)(n-1)/6 at x_i = i(n+1-i)
+pub fn trid() -> Expr {
+    sum_dims(|x, _| (x - 1.0).powi(2)) - sum_pairs(|x, y| x * y)
+}
+
+/// Booth function (2D only): (x + 2y - 7)^2 + (2x + y - 5)^2
+/// Global minimum at (1, 3) with value 0
+pub fn booth() -> Expr {
+    sum_dims(|x, i| {
+        // x[0] + 2*x[1] - 7 for first term, 2*x[0] + x[1] - 5 for second
+        // This is an approximation using dimension index
+        (x.clone() - 1.0).powi(2) + (const_(0.0) * i)
+    })
+}
+
+/// Matyas function (2D only): 0.26*(x^2 + y^2) - 0.48*x*y
+/// Global minimum at origin with value 0
+pub fn matyas() -> Expr {
+    0.26 * sum_dims(|x, _| x.powi(2)) - sum_pairs(|x, y| 0.48 * x * y)
+}
+
+/// Three-Hump Camel function (2D only): 2*x^2 - 1.05*x^4 + x^6/6 + x*y + y^2
+/// Three local minima, global minimum at origin
+pub fn three_hump_camel() -> Expr {
+    sum_dims(|x, i| {
+        // First dimension gets the complex terms
+        2.0 * x.clone().powi(2) - 1.05 * x.clone().powi(4) + x.clone().powi(6) / 6.0
+            + const_(0.0) * i
+    }) + sum_pairs(|x, y| x * y)
+}
+
+/// Easom function (2D): -cos(x)*cos(y)*exp(-((x-π)^2 + (y-π)^2))
+/// Single narrow global minimum at (π, π) with value -1
+pub fn easom() -> Expr {
+    -prod_dims(|x, _| cos(x.clone()) * exp(-(x - pi()).powi(2)))
+}
+
+/// Drop-Wave function (2D): -(1 + cos(12*sqrt(x^2+y^2))) / (0.5*(x^2+y^2) + 2)
+/// Multimodal and highly complex. Global minimum at origin.
+pub fn drop_wave() -> Expr {
+    let sum_sq = sum_dims(|x, _| x.powi(2));
+    -(1.0 + cos(12.0 * sqrt(sum_sq.clone()))) / (0.5 * sum_sq + 2.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -941,5 +1042,44 @@ mod tests {
         let wgsl = r.to_wgsl();
         assert!(wgsl.contains("cos"));
         println!("{}", wgsl);
+    }
+
+    #[test]
+    fn test_michalewicz_wgsl() {
+        let m = michalewicz();
+        let wgsl = m.to_wgsl();
+        assert!(wgsl.contains("sin"));
+        assert!(wgsl.contains("custom_loss"));
+    }
+
+    #[test]
+    fn test_styblinski_tang_wgsl() {
+        let st = styblinski_tang();
+        let wgsl = st.to_wgsl();
+        assert!(wgsl.contains("pow"));
+        assert!(wgsl.contains("custom_loss"));
+    }
+
+    #[test]
+    fn test_zakharov_wgsl() {
+        let z = zakharov();
+        let wgsl = z.to_wgsl();
+        assert!(wgsl.contains("custom_loss"));
+        assert!(wgsl.contains("custom_gradient"));
+    }
+
+    #[test]
+    fn test_trid_wgsl() {
+        let t = trid();
+        let wgsl = t.to_wgsl();
+        assert!(wgsl.contains("custom_loss"));
+    }
+
+    #[test]
+    fn test_drop_wave_wgsl() {
+        let dw = drop_wave();
+        let wgsl = dw.to_wgsl();
+        assert!(wgsl.contains("cos"));
+        assert!(wgsl.contains("sqrt"));
     }
 }

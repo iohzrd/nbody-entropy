@@ -232,7 +232,10 @@ Available primitives:
 - **Operators**: `+`, `-`, `*`, `/`, `.powi()`, `.powf()`
 - **Reductions**: `sum_dims(|x, i| ...)`, `prod_dims(|x, i| ...)`, `sum_pairs(|x, y| ...)`
 
-Pre-built expressions: `sphere()`, `rastrigin()`, `rosenbrock()`, `ackley()`, `griewank()`, `levy()`
+Pre-built expressions:
+- **Classic**: `sphere()`, `rastrigin()`, `rosenbrock()`, `ackley()`, `griewank()`, `levy()`
+- **New**: `michalewicz()`, `styblinski_tang()`, `dixon_price()`, `zakharov()`, `sum_squares()`, `trid()`
+- **2D**: `matyas()`, `three_hump_camel()`, `easom()`, `drop_wave()`
 
 ```bash
 # Run custom expression demo
