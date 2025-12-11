@@ -27,3 +27,8 @@ iced = { version = "0.14.0", features = ["canvas", "tokio"], optional = true }
 name = "nbody-viz"
 path = "src/viz.rs"
 required-features = ["viz"]
+
+[[bin]]
+name = "gpu-svgd-viz"
+path = "src/gpu_svgd_viz.rs"
+required-features = ["viz", "gpu"]

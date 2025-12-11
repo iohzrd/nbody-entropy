@@ -1,4 +1,8 @@
-//! Particle visualization for nbody-entropy using iced
+//! SVGD-style particle sampler for ML optimization
+//!
+//! Tiny neural net: y = w2 * tanh(w1 * x)
+//! Two parameters [w1, w2] create non-convex loss surface.
+//! Symmetry: (w1, w2) and (-w1, -w2) are equivalent solutions.
 //!
 //! Run with: cargo run --release --features viz --bin nbody-viz
 
@@ -6,23 +10,39 @@ use iced::mouse;
 use iced::widget::{canvas, container};
 use iced::{Color, Element, Length, Point, Rectangle, Renderer, Size, Subscription, Theme};
 
-const PARTICLE_COUNT: usize = 64;
-const ATTRACTOR_COUNT: usize = 8;
-const MAX_LINE_DISTANCE: f32 = 80.0;
+// Sampler constants
+const SAMPLER_COUNT: usize = 50;
+const GAMMA: f32 = 0.5;              // Friction coefficient for Langevin dynamics
+const TEMPERATURE: f32 = 0.05;       // Boltzmann temperature
+const REPULSION_STRENGTH: f32 = 0.2; // SVGD-style repulsion between particles
+const KERNEL_BANDWIDTH: f32 = 0.3;   // RBF kernel bandwidth (h)
 
-// N-body physics constants
-const G: f32 = 0.0001;
-const SOFTENING: f32 = 0.001;
-const DAMPING: f32 = 0.999;
-const BOUNDARY: f32 = 1.0;
-const DT: f32 = 0.016;
-const SLINGSHOT_RADIUS: f32 = 0.08; // Distance below which slingshot kicks in
-const SLINGSHOT_STRENGTH: f32 = 0.002; // Tangential velocity boost strength
+// Simulation constants
+const DT: f32 = 0.01;                // Time step
+const DOMAIN_MIN: f32 = -4.0;        // Parameter space for [w1, w2]
+const DOMAIN_MAX: f32 = 4.0;
+const DOMAIN_SIZE: f32 = DOMAIN_MAX - DOMAIN_MIN;
+
+// Training data for: y = 2.0 * tanh(1.5 * x)
+// Two equivalent optima: (w1=1.5, w2=2.0) and (w1=-1.5, w2=-2.0)
+const TRAIN_DATA: [(f32, f32); 10] = [
+    (-2.0, -1.93),  // 2.0 * tanh(-3.0) ≈ -1.99
+    (-1.5, -1.79),  // 2.0 * tanh(-2.25) ≈ -1.98
+    (-1.0, -1.52),  // 2.0 * tanh(-1.5) ≈ -1.82
+    (-0.5, -0.93),  // 2.0 * tanh(-0.75) ≈ -1.22
+    (0.0, 0.0),     // 2.0 * tanh(0) = 0
+    (0.5, 0.93),
+    (1.0, 1.52),
+    (1.5, 1.79),
+    (2.0, 1.93),
+    (2.5, 1.97),
+];
+// True parameters: w1=1.5, w2=2.0 (or w1=-1.5, w2=-2.0)
 
 fn main() -> iced::Result {
     iced::application(App::default, update, view)
         .subscription(subscription)
-        .title("N-Body Entropy - Visualization")
+        .title("SVGD Tiny Neural Net")
         .run()
 }
 
@@ -65,15 +85,72 @@ fn subscription(_app: &App) -> Subscription<Message> {
 }
 
 struct Particle {
-    pos: [f32; 2],
-    vel: [f32; 2],
-    mass: f32,
-    is_attractor: bool,
+    pos: [f32; 2],  // Position in domain [DOMAIN_MIN, DOMAIN_MAX]
+    vel: [f32; 2],  // Velocity (momentum for Langevin dynamics)
+}
+
+/// Neural net forward pass: y = w2 * tanh(w1 * x)
+#[inline]
+fn nn_forward(w1: f32, w2: f32, x: f32) -> f32 {
+    w2 * (w1 * x).tanh()
+}
+
+/// MSE loss for neural net
+/// E(w1, w2) = (1/n) Σ (w2 * tanh(w1 * x_i) - y_i)²
+#[inline]
+fn nn_loss(w1: f32, w2: f32) -> f32 {
+    let mut sum = 0.0;
+    for (x, y) in TRAIN_DATA.iter() {
+        let pred = nn_forward(w1, w2, *x);
+        let err = pred - y;
+        sum += err * err;
+    }
+    sum / TRAIN_DATA.len() as f32
+}
+
+/// Gradient of neural net loss w.r.t. [w1, w2]
+/// ∂E/∂w1 = (2/n) Σ (pred - y) * w2 * (1 - tanh²(w1*x)) * x
+/// ∂E/∂w2 = (2/n) Σ (pred - y) * tanh(w1*x)
+#[inline]
+fn nn_gradient(w1: f32, w2: f32) -> [f32; 2] {
+    let mut dw1 = 0.0;
+    let mut dw2 = 0.0;
+    for (x, y) in TRAIN_DATA.iter() {
+        let z = w1 * x;           // pre-activation
+        let a = z.tanh();         // activation
+        let pred = w2 * a;        // output
+        let err = pred - y;       // error
+
+        // tanh derivative: 1 - tanh²(z)
+        let tanh_deriv = 1.0 - a * a;
+
+        dw1 += err * w2 * tanh_deriv * x;
+        dw2 += err * a;
+    }
+    let n = TRAIN_DATA.len() as f32;
+    [2.0 * dw1 / n, 2.0 * dw2 / n]
+}
+
+/// RBF kernel: K(x,y) = exp(-||x-y||² / (2h²))
+#[inline]
+fn rbf_kernel(dx: f32, dy: f32) -> f32 {
+    let dist_sq = dx * dx + dy * dy;
+    (-dist_sq / (2.0 * KERNEL_BANDWIDTH * KERNEL_BANDWIDTH)).exp()
+}
+
+/// Gradient of RBF kernel with respect to first argument
+/// ∇_x K(x,y) = -K(x,y) * (x-y) / h²
+#[inline]
+fn rbf_kernel_gradient(dx: f32, dy: f32) -> [f32; 2] {
+    let k = rbf_kernel(dx, dy);
+    let h_sq = KERNEL_BANDWIDTH * KERNEL_BANDWIDTH;
+    [-k * dx / h_sq, -k * dy / h_sq]
 }
 
 struct ParticleSystem {
     particles: Vec<Particle>,
     cache: canvas::Cache,
+    rng_state: u64,
 }
 
 impl Default for ParticleSystem {
@@ -82,168 +159,123 @@ impl Default for ParticleSystem {
     }
 }
 
-/// Wrap position to stay within bounds
+/// Clamp position to domain
 #[inline]
-fn wrap(x: f32) -> f32 {
-    let x = x % BOUNDARY;
-    if x < 0.0 { x + BOUNDARY } else { x }
-}
-
-/// Compute shortest distance with wrapping
-#[inline]
-fn wrapped_delta(a: f32, b: f32) -> f32 {
-    let mut d = b - a;
-    let half = BOUNDARY / 2.0;
-    if d > half {
-        d -= BOUNDARY;
-    }
-    if d < -half {
-        d += BOUNDARY;
-    }
-    d
+fn clamp_to_domain(x: f32) -> f32 {
+    x.clamp(DOMAIN_MIN, DOMAIN_MAX)
 }
 
 impl ParticleSystem {
     fn new(seed: u64) -> Self {
         let mut state = seed;
-        let mut particles = Vec::with_capacity(PARTICLE_COUNT);
+        let mut particles = Vec::with_capacity(SAMPLER_COUNT);
 
-        for i in 0..PARTICLE_COUNT {
+        for _ in 0..SAMPLER_COUNT {
             state ^= state << 13;
             state ^= state >> 7;
             state ^= state << 17;
 
+            // Initialize uniformly across domain
             let pos = [
-                (state & 0xFFFF) as f32 / 65535.0 * BOUNDARY,
-                ((state >> 16) & 0xFFFF) as f32 / 65535.0 * BOUNDARY,
+                DOMAIN_MIN + (state & 0xFFFF) as f32 / 65535.0 * DOMAIN_SIZE,
+                DOMAIN_MIN + ((state >> 16) & 0xFFFF) as f32 / 65535.0 * DOMAIN_SIZE,
             ];
-
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-
-            let vel = [
-                ((state & 0xFFFF) as f32 / 65535.0 - 0.5) * 0.01,
-                (((state >> 16) & 0xFFFF) as f32 / 65535.0 - 0.5) * 0.01,
-            ];
-
-            let is_attractor = i < ATTRACTOR_COUNT;
-            let mass = if is_attractor { 10.0 } else { 1.0 };
 
             particles.push(Particle {
                 pos,
-                vel,
-                mass,
-                is_attractor,
+                vel: [0.0, 0.0],
             });
         }
 
         Self {
             particles,
             cache: canvas::Cache::new(),
+            rng_state: state,
         }
+    }
+
+    /// Simple xorshift random number generator
+    fn rand(&mut self) -> f32 {
+        self.rng_state ^= self.rng_state << 13;
+        self.rng_state ^= self.rng_state >> 7;
+        self.rng_state ^= self.rng_state << 17;
+        (self.rng_state & 0xFFFFFF) as f32 / 16777215.0
+    }
+
+    /// Box-Muller transform for Gaussian noise
+    fn randn(&mut self) -> f32 {
+        let u1 = self.rand().max(1e-10);
+        let u2 = self.rand();
+        (-2.0 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).cos()
     }
 
     fn request_redraw(&self) {
         self.cache.clear();
     }
 
-    /// Step the n-body simulation forward
+    /// Step the Langevin dynamics with SVGD repulsion
     fn step_physics(&mut self) {
-        // Compute forces on attractors from other attractors
-        let mut attractor_forces = [[0.0f32; 2]; ATTRACTOR_COUNT];
+        let n = self.particles.len();
 
-        for i in 0..ATTRACTOR_COUNT {
-            for j in (i + 1)..ATTRACTOR_COUNT {
-                let pi = self.particles[i].pos;
-                let pj = self.particles[j].pos;
+        // Collect current positions for O(n²) repulsion calculation
+        let positions: Vec<[f32; 2]> = self.particles.iter().map(|p| p.pos).collect();
 
-                let dx = wrapped_delta(pi[0], pj[0]);
-                let dy = wrapped_delta(pi[1], pj[1]);
+        // Compute SVGD repulsion forces for all particles
+        let mut repulsion_forces: Vec<[f32; 2]> = vec![[0.0, 0.0]; n];
 
-                let dist_sq = dx * dx + dy * dy + SOFTENING;
-                let dist = dist_sq.sqrt();
-
-                // Gravitational attraction
-                let gravity = G * self.particles[i].mass * self.particles[j].mass / dist_sq;
-
-                let mut fx = gravity * dx / dist;
-                let mut fy = gravity * dy / dist;
-
-                // Slingshot effect: tangential velocity boost on close approach
-                if dist < SLINGSHOT_RADIUS {
-                    let tangent_x = -dy / dist;
-                    let tangent_y = dx / dist;
-                    let boost = SLINGSHOT_STRENGTH / dist_sq;
-                    fx += boost * tangent_x;
-                    fy += boost * tangent_y;
+        for i in 0..n {
+            for j in 0..n {
+                if i == j {
+                    continue;
                 }
+                let dx = positions[i][0] - positions[j][0];
+                let dy = positions[i][1] - positions[j][1];
 
-                attractor_forces[i][0] += fx;
-                attractor_forces[i][1] += fy;
-                attractor_forces[j][0] -= fx;
-                attractor_forces[j][1] -= fy;
+                // RBF kernel gradient gives repulsion direction
+                let grad = rbf_kernel_gradient(dx, dy);
+                repulsion_forces[i][0] += grad[0];
+                repulsion_forces[i][1] += grad[1];
             }
+            // Normalize by number of particles
+            repulsion_forces[i][0] *= REPULSION_STRENGTH / n as f32;
+            repulsion_forces[i][1] *= REPULSION_STRENGTH / n as f32;
         }
 
-        // Update attractor velocities and positions
-        for i in 0..ATTRACTOR_COUNT {
-            let p = &mut self.particles[i];
-            p.vel[0] += attractor_forces[i][0] * DT / p.mass;
-            p.vel[1] += attractor_forces[i][1] * DT / p.mass;
-            p.vel[0] *= DAMPING;
-            p.vel[1] *= DAMPING;
-            p.pos[0] = wrap(p.pos[0] + p.vel[0] * DT);
-            p.pos[1] = wrap(p.pos[1] + p.vel[1] * DT);
-        }
+        // Update each particle with Langevin dynamics
+        // dx = -γ∇E(x)dt + repulsion + √(2γT)dW
+        let noise_scale = (2.0 * GAMMA * TEMPERATURE * DT).sqrt();
 
-        // Update followers - influenced by attractors
-        for i in ATTRACTOR_COUNT..PARTICLE_COUNT {
-            let mut fx = 0.0;
-            let mut fy = 0.0;
-
-            // Sample a few attractors for speed
-            let sample_count = 4.min(ATTRACTOR_COUNT);
-            let step = ATTRACTOR_COUNT / sample_count;
-            for s in 0..sample_count {
-                let j = s * step;
-                let pi = self.particles[i].pos;
-                let pj = self.particles[j].pos;
-
-                let dx = wrapped_delta(pi[0], pj[0]);
-                let dy = wrapped_delta(pi[1], pj[1]);
-
-                let dist_sq = dx * dx + dy * dy + SOFTENING;
-                let dist = dist_sq.sqrt();
-
-                // Gravitational attraction
-                let gravity = G * self.particles[j].mass / dist_sq;
-
-                fx += gravity * dx / dist;
-                fy += gravity * dy / dist;
-
-                // Slingshot effect: tangential velocity boost on close approach
-                if dist < SLINGSHOT_RADIUS {
-                    let tangent_x = -dy / dist;
-                    let tangent_y = dx / dist;
-                    let boost = SLINGSHOT_STRENGTH / dist_sq;
-                    fx += boost * tangent_x;
-                    fy += boost * tangent_y;
-                }
-            }
+        for i in 0..n {
+            // Generate noise before borrowing particle
+            let noise_x = self.randn();
+            let noise_y = self.randn();
 
             let p = &mut self.particles[i];
-            p.vel[0] += fx * DT;
-            p.vel[1] += fy * DT;
-            p.vel[0] *= DAMPING;
-            p.vel[1] *= DAMPING;
-            p.pos[0] = wrap(p.pos[0] + p.vel[0] * DT);
-            p.pos[1] = wrap(p.pos[1] + p.vel[1] * DT);
+
+            // Energy gradient (drives particles toward low loss)
+            let grad = nn_gradient(p.pos[0], p.pos[1]);
+
+            // Langevin update with SVGD repulsion
+            // Overdamped Langevin: we directly update position (no momentum)
+            p.pos[0] += (-GAMMA * grad[0] + repulsion_forces[i][0]) * DT + noise_scale * noise_x;
+            p.pos[1] += (-GAMMA * grad[1] + repulsion_forces[i][1]) * DT + noise_scale * noise_y;
+
+            // Clamp to domain (soft boundary)
+            p.pos[0] = clamp_to_domain(p.pos[0]);
+            p.pos[1] = clamp_to_domain(p.pos[1]);
         }
     }
 
+    /// Map particle position from domain to screen coordinates
     fn get_position(&self, p: &Particle, bounds: Size) -> Point {
-        Point::new(p.pos[0] * bounds.width, p.pos[1] * bounds.height)
+        let norm_x = (p.pos[0] - DOMAIN_MIN) / DOMAIN_SIZE;
+        let norm_y = (p.pos[1] - DOMAIN_MIN) / DOMAIN_SIZE;
+        Point::new(norm_x * bounds.width, norm_y * bounds.height)
+    }
+
+    /// Get loss at a particle's position (w1, w2 parameters)
+    fn get_energy(&self, p: &Particle) -> f32 {
+        nn_loss(p.pos[0], p.pos[1])
     }
 }
 
@@ -259,50 +291,81 @@ impl canvas::Program<Message> for ParticleSystem {
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry<Renderer>> {
         let geometry = self.cache.draw(renderer, bounds.size(), |frame| {
-            // Get all current positions
-            let positions: Vec<Point> = self
-                .particles
-                .iter()
-                .map(|p| self.get_position(p, bounds.size()))
-                .collect();
+            let size = bounds.size();
 
-            // Draw lines between nearby particles
-            for i in 0..positions.len() {
-                for j in (i + 1)..positions.len() {
-                    let p1 = positions[i];
-                    let p2 = positions[j];
-                    let dx = p2.x - p1.x;
-                    let dy = p2.y - p1.y;
-                    let dist = (dx * dx + dy * dy).sqrt();
+            // Draw grid lines for parameter space
+            let grid_color = Color::from_rgba(0.2, 0.3, 0.4, 0.3);
+            for i in -3..=3 {
+                let x = ((i as f32 - DOMAIN_MIN) / DOMAIN_SIZE) * size.width;
+                let y = ((i as f32 - DOMAIN_MIN) / DOMAIN_SIZE) * size.height;
 
-                    if dist < MAX_LINE_DISTANCE {
-                        let alpha = 1.0 - (dist / MAX_LINE_DISTANCE);
-                        // Attractor-attractor lines are brighter
-                        let is_attractor_pair = i < ATTRACTOR_COUNT && j < ATTRACTOR_COUNT;
-                        let color = if is_attractor_pair {
-                            Color::from_rgba(1.0, 0.6, 0.3, alpha * 0.5)
-                        } else {
-                            Color::from_rgba(0.3, 0.6, 1.0, alpha * 0.3)
-                        };
-                        let line = canvas::Path::line(p1, p2);
-                        frame.stroke(
-                            &line,
-                            canvas::Stroke::default().with_color(color).with_width(1.0),
-                        );
-                    }
-                }
+                // Vertical line (weight values)
+                let vline = canvas::Path::line(
+                    Point::new(x, 0.0),
+                    Point::new(x, size.height),
+                );
+                frame.stroke(&vline, canvas::Stroke::default().with_color(grid_color).with_width(0.5));
+
+                // Horizontal line (bias values)
+                let hline = canvas::Path::line(
+                    Point::new(0.0, y),
+                    Point::new(size.width, y),
+                );
+                frame.stroke(&hline, canvas::Stroke::default().with_color(grid_color).with_width(0.5));
             }
 
-            // Draw particles - attractors are larger and orange
-            for (i, pos) in positions.iter().enumerate() {
-                let is_attractor = i < ATTRACTOR_COUNT;
-                let (radius, color) = if is_attractor {
-                    (5.0, Color::from_rgb(1.0, 0.5, 0.2))
-                } else {
-                    (2.5, Color::from_rgb(0.4, 0.7, 1.0))
-                };
-                let circle = canvas::Path::circle(*pos, radius);
+            // Highlight both equivalent optima
+            // Optimum 1: (w1=1.5, w2=2.0)
+            let opt1_x = ((1.5 - DOMAIN_MIN) / DOMAIN_SIZE) * size.width;
+            let opt1_y = ((2.0 - DOMAIN_MIN) / DOMAIN_SIZE) * size.height;
+            let optimum1 = canvas::Path::circle(Point::new(opt1_x, opt1_y), 12.0);
+            frame.stroke(
+                &optimum1,
+                canvas::Stroke::default()
+                    .with_color(Color::from_rgba(0.0, 1.0, 0.5, 0.8))
+                    .with_width(3.0),
+            );
+            let opt1_dot = canvas::Path::circle(Point::new(opt1_x, opt1_y), 3.0);
+            frame.fill(&opt1_dot, Color::from_rgb(0.0, 1.0, 0.5));
+
+            // Optimum 2: (w1=-1.5, w2=-2.0) - symmetric solution
+            let opt2_x = ((-1.5 - DOMAIN_MIN) / DOMAIN_SIZE) * size.width;
+            let opt2_y = ((-2.0 - DOMAIN_MIN) / DOMAIN_SIZE) * size.height;
+            let optimum2 = canvas::Path::circle(Point::new(opt2_x, opt2_y), 12.0);
+            frame.stroke(
+                &optimum2,
+                canvas::Stroke::default()
+                    .with_color(Color::from_rgba(0.0, 1.0, 0.5, 0.8))
+                    .with_width(3.0),
+            );
+            let opt2_dot = canvas::Path::circle(Point::new(opt2_x, opt2_y), 3.0);
+            frame.fill(&opt2_dot, Color::from_rgb(0.0, 1.0, 0.5));
+
+            // Draw particles colored by loss
+            // Lower loss = greener, higher loss = redder
+            let max_energy = 10.0; // MSE scale
+
+            for p in &self.particles {
+                let pos = self.get_position(p, size);
+                let energy = self.get_energy(p);
+
+                // Color: green (low energy) to red (high energy)
+                let t = (energy / max_energy).clamp(0.0, 1.0);
+                let color = Color::from_rgb(
+                    0.2 + 0.8 * t,      // Red increases with energy
+                    0.8 * (1.0 - t),    // Green decreases with energy
+                    0.3,                 // Constant blue
+                );
+
+                let circle = canvas::Path::circle(pos, 4.0);
                 frame.fill(&circle, color);
+            }
+
+            // Draw a small dot at each particle position for better visibility
+            for p in &self.particles {
+                let pos = self.get_position(p, size);
+                let dot = canvas::Path::circle(pos, 1.5);
+                frame.fill(&dot, Color::WHITE);
             }
         });
 

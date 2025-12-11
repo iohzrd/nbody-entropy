@@ -1,5 +1,8 @@
 pub mod gpu;
+pub mod gpu_svgd;
+
 pub use gpu::GpuNbodyEntropy;
+pub use gpu_svgd::GpuSvgd;
 
 pub const DEFAULT_PARTICLE_COUNT: usize = 64;
 pub const ATTRACTOR_COUNT: usize = 8;
