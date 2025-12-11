@@ -135,3 +135,8 @@ required-features = ["gpu"]
 name = "mode-discovery"
 path = "src/bin/mode-discovery.rs"
 required-features = ["gpu"]
+
+[[bin]]
+name = "scale-test"
+path = "src/bin/scale-test.rs"
+required-features = ["gpu"]

@@ -59,7 +59,7 @@ impl ThermodynamicMode {
 }
 
 const MAX_DIM: usize = 64;
-const MAX_PARTICLES: usize = 16384;  // Support up to 16k particles
+const MAX_PARTICLES: usize = 500_000;  // Support up to 500k particles (GPU memory dependent)
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
