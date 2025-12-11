@@ -32,3 +32,43 @@ required-features = ["viz"]
 name = "gpu-svgd-viz"
 path = "src/gpu_svgd_viz.rs"
 required-features = ["viz", "gpu"]
+
+[[bin]]
+name = "benchmark"
+path = "src/benchmark.rs"
+required-features = ["gpu"]
+
+[[bin]]
+name = "thermodynamic-viz"
+path = "src/thermodynamic_viz.rs"
+required-features = ["viz", "gpu"]
+
+[[bin]]
+name = "thermodynamic-benchmark"
+path = "src/thermodynamic_benchmark.rs"
+required-features = ["gpu"]
+
+[[bin]]
+name = "annealing-demo"
+path = "src/annealing_demo.rs"
+required-features = ["viz", "gpu"]
+
+[[bin]]
+name = "thermodynamic-stream"
+path = "src/thermodynamic_stream.rs"
+required-features = ["gpu"]
+
+[[bin]]
+name = "thermodynamic-8d"
+path = "src/thermodynamic_8d.rs"
+required-features = ["gpu"]
+
+[[bin]]
+name = "classic-benchmark"
+path = "src/classic_benchmark.rs"
+required-features = ["gpu"]
+
+[[bin]]
+name = "nn-benchmark"
+path = "src/nn_benchmark.rs"
+required-features = ["gpu"]
