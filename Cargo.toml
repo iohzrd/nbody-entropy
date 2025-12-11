@@ -97,3 +97,23 @@ required-features = ["gpu"]
 name = "hyperparam-tuning"
 path = "src/hyperparam_tuning.rs"
 required-features = ["gpu"]
+
+[[bin]]
+name = "rastrigin-annealing"
+path = "src/rastrigin_annealing.rs"
+required-features = ["viz", "gpu"]
+
+[[bin]]
+name = "ackley-annealing"
+path = "src/ackley_annealing.rs"
+required-features = ["viz", "gpu"]
+
+[[bin]]
+name = "rosenbrock-annealing"
+path = "src/rosenbrock_annealing.rs"
+required-features = ["viz", "gpu"]
+
+[[bin]]
+name = "schwefel-annealing"
+path = "src/schwefel_annealing.rs"
+required-features = ["viz", "gpu"]

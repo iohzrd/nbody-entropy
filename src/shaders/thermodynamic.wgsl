@@ -455,6 +455,37 @@ fn sphere_gradient(pos: array<f32, 64>, dim: u32, d_idx: u32) -> f32 {
     return 2.0 * pos[d_idx];
 }
 
+// Schwefel function (N-dimensional) - deceptive global minimum far from origin
+// Global minimum: f(420.9687, ..., 420.9687) = 0
+// The global minimum is far from the origin, and local minima are deceptive
+fn schwefel_loss(pos: array<f32, 64>, dim: u32) -> f32 {
+    var sum = 0.0;
+    for (var i = 0u; i < dim; i = i + 1u) {
+        let x = pos[i];
+        sum = sum + x * sin(sqrt(abs(x)));
+    }
+    return 418.9829 * f32(dim) - sum;
+}
+
+fn schwefel_gradient(pos: array<f32, 64>, dim: u32, d_idx: u32) -> f32 {
+    let x = pos[d_idx];
+    let abs_x = abs(x);
+
+    if abs_x < 0.0001 {
+        return 0.0;
+    }
+
+    let sqrt_abs_x = sqrt(abs_x);
+    let sign_x = select(-1.0, 1.0, x >= 0.0);
+
+    // d/dx [x * sin(sqrt(|x|))] = sin(sqrt(|x|)) + x * cos(sqrt(|x|)) * (sign(x) / (2 * sqrt(|x|)))
+    // = sin(sqrt(|x|)) + sign(x) * sqrt(|x|) * cos(sqrt(|x|)) / 2
+    let grad = sin(sqrt_abs_x) + sign_x * sqrt_abs_x * cos(sqrt_abs_x) / 2.0;
+
+    // Negative because schwefel_loss = 418.9829*n - sum
+    return -grad;
+}
+
 // ============================================================================
 
 // Pass 1: Compute pairwise repulsion (SVGD kernel gradient)
@@ -572,6 +603,10 @@ fn update_particles(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Deep MLP (3-layer) on circles
             p.energy = mlp_deep_loss(p.pos);
         }
+        case 9u: {
+            // Schwefel - deceptive with far-off global minimum
+            p.energy = schwefel_loss(p.pos, uniforms.dim);
+        }
         default: {
             p.energy = nn_loss_2d(p.pos[0], p.pos[1]);
             loss_grad_2d = nn_gradient_2d(p.pos[0], p.pos[1]);
@@ -644,6 +679,10 @@ fn update_particles(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // Deep MLP
                 grad = mlp_deep_gradient(p.pos, d);
             }
+            case 9u: {
+                // Schwefel
+                grad = schwefel_gradient(p.pos, uniforms.dim, d);
+            }
             default: {
                 if d == 0u {
                     grad = loss_grad_2d.x;
@@ -662,7 +701,14 @@ fn update_particles(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let noise_term = noise_scale * noise;
 
         p.pos[d] = p.pos[d] + (grad_term + repulsion_term) * uniforms.dt + noise_term;
-        p.pos[d] = clamp(p.pos[d], -5.0, 5.0);
+
+        // Clamp based on loss function (Schwefel needs larger domain)
+        if uniforms.loss_fn == 9u {
+            // Schwefel: global minimum at ~420.97
+            p.pos[d] = clamp(p.pos[d], -500.0, 500.0);
+        } else {
+            p.pos[d] = clamp(p.pos[d], -5.0, 5.0);
+        }
     }
 
     // ENTROPY EXTRACTION (at high temperature)

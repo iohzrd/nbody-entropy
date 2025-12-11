@@ -34,6 +34,7 @@ pub enum LossFunction {
     MlpXor = 6,        // Real MLP on XOR problem (9 params)
     MlpSpiral = 7,     // Real MLP on spiral classification
     MlpDeep = 8,       // Deep MLP: 2->4->4->1 (37 params) on circles dataset
+    Schwefel = 9,      // Deceptive - global min at (420.97, ...) far from origin
 }
 
 impl ThermodynamicMode {
@@ -400,6 +401,17 @@ impl ThermodynamicSystem {
     /// Get current repulsion samples setting
     pub fn repulsion_samples(&self) -> u32 {
         self.repulsion_samples
+    }
+
+    /// Set the time step (dt) for finer control over stability
+    /// Smaller dt = more stable but slower convergence
+    pub fn set_dt(&mut self, dt: f32) {
+        self.dt = dt;
+    }
+
+    /// Get current time step
+    pub fn dt(&self) -> f32 {
+        self.dt
     }
 
     /// Set the loss function
