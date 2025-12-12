@@ -4,7 +4,13 @@
 
 We demonstrate that a single GPU-accelerated interacting particle system can perform three fundamentally different computations—**optimization**, **Bayesian inference**, and **entropy generation**—controlled solely by a temperature parameter. This suggests that thermodynamic particle dynamics may serve as a universal computational primitive, with temperature selecting the type of computation performed.
 
-## Core Thesis
+## 1. Introduction
+
+Modern machine learning relies on three seemingly distinct computational tasks: optimization (finding parameter values that minimize a loss function), sampling (drawing from probability distributions for Bayesian inference), and stochasticity (generating random numbers for regularization and exploration). These tasks are typically implemented using separate algorithms with different theoretical foundations.
+
+We propose that these three computations are unified manifestations of a single physical process: interacting particle systems evolving under Langevin dynamics. The temperature parameter T smoothly interpolates between deterministic optimization (T → 0) and pure stochastic exploration (T → ∞), with Bayesian sampling emerging at intermediate temperatures.
+
+### 1.1 Core Thesis
 
 > **Interacting particle systems with pairwise repulsion are a universal computational primitive. Temperature selects what computation you're doing:**
 >
@@ -14,361 +20,215 @@ We demonstrate that a single GPU-accelerated interacting particle system can per
 
 These are not three different algorithms—they are **one algorithm** with a temperature parameter that controls the exploration/exploitation tradeoff.
 
-## The Unified Update Equation
+## 2. Theoretical Framework
 
-All three modes share the same Langevin dynamics update:
+### 2.1 The Unified Update Equation
 
-```
-dx = -γ∇E(x)·dt + repulsion·dt + √(2γT·dt)·dW
-```
+All three computational modes share the same Langevin dynamics update:
+
+$$dx = -\gamma\nabla E(x) \cdot dt + F_{repulsion} \cdot dt + \sqrt{2\gamma T \cdot dt} \cdot dW$$
 
 Where:
+- $\nabla E(x)$ = gradient of energy/loss function (attraction to minima)
+- $F_{repulsion}$ = pairwise kernel gradient (maintains particle diversity)
+- $T$ = temperature (controls noise magnitude)
+- $dW$ = Wiener process (Brownian motion)
 
-- `∇E(x)` = gradient of energy/loss function (attraction to minima)
-- `repulsion` = pairwise kernel gradient (keeps particles diverse)
-- `T` = temperature (controls noise magnitude)
-- `dW` = Wiener process (Brownian motion)
+### 2.2 Temperature-Dependent Behavior
 
-### How Temperature Controls Behavior
+| Temperature | Dominant Term | Behavior | Output |
+|-------------|---------------|----------|--------|
+| T → 0 | Gradient | Particles flow downhill to minima | Optimized parameters |
+| T ~ 0.1 | Balance | Particles sample from exp(-E/T) | Posterior samples |
+| T >> 1 | Noise | Particles explore chaotically | Random bits |
 
-| Temperature | Dominant Term | Behavior                          | Output               |
-| ----------- | ------------- | --------------------------------- | -------------------- |
-| T → 0       | Gradient      | Particles flow downhill to minima | Optimized parameters |
-| T ~ 0.1     | Balance       | Particles sample from exp(-E/T)   | Posterior samples    |
-| T >> 1      | Noise         | Particles explore chaotically     | Random bits          |
+At low temperature, the gradient term dominates and particles converge to local minima. At high temperature, thermal noise dominates and particles explore the space ergodically. At intermediate temperatures, the system reaches thermal equilibrium, sampling from the Boltzmann distribution p(x) ∝ exp(-E(x)/T).
 
-## What Thermodynamic Sampling Can Do (That Gradient Descent Can't)
+### 2.3 The Role of Repulsion (SVGD)
 
-### 1. Multi-Modal Mode Discovery
+The pairwise repulsion term, inspired by Stein Variational Gradient Descent (Liu & Wang, 2016), prevents mode collapse by introducing a repulsive force between nearby particles:
 
-Standard gradient descent converges to ONE local minimum. Thermodynamic sampling with SVGD repulsion finds ALL modes simultaneously.
+$$F_{repulsion}^{(i)} = \frac{1}{n}\sum_{j} k(x_j, x_i)\nabla_{x_j} E(x_j) + \nabla_{x_j} k(x_j, x_i)$$
 
-**Demo**: `cargo run --release --features gpu --bin mode-discovery`
+where k(·,·) is a positive definite kernel (typically RBF). This term is crucial for:
+1. Maintaining diversity during optimization (avoiding premature convergence)
+2. Approximating the true posterior during sampling
+3. Ensuring ergodic exploration during entropy generation
 
-```
-Energy landscape: E(x,y) = (x² - 4)² + (y² - 4)²
-Known minima at: (-2,-2), (-2,+2), (+2,-2), (+2,+2)
+## 3. Capabilities Beyond Gradient Descent
 
-Method 1: Gradient Descent (T → 0, no repulsion)
-  Particles converged to 1 mode(s)
+### 3.1 Multi-Modal Mode Discovery
 
-Method 2: Thermodynamic Sampling (T = 0.5, SVGD repulsion)
-  Particles spread across 4 mode(s):
-    (+2.00, +2.00): 25 particles
-    (-2.00, +2.00): 24 particles
-    (+2.00, -2.00): 26 particles
-    (-2.00, -2.00): 25 particles
+Standard gradient descent converges to a single local minimum determined by initialization. Thermodynamic sampling with SVGD repulsion discovers all modes simultaneously.
 
-4D Hypercube Test: Discovered 16/16 modes of {-1,+1}^4
-```
+**Experiment**: Four-well potential E(x,y) = (x² - 4)² + (y² - 4)² with minima at (±2, ±2).
 
-The SVGD repulsion term prevents mode collapse—particles push each other apart to cover the full landscape.
+| Method | Modes Found |
+|--------|-------------|
+| Gradient Descent (T → 0, no repulsion) | 1 |
+| Thermodynamic Sampling (T = 0.5, SVGD) | 4 |
 
-### 2. Bayesian Uncertainty Quantification
+Extended to 4D hypercube with 16 modes at vertices of {-1, +1}⁴: thermodynamic sampling discovers 16/16 modes.
 
-Instead of finding ONE weight vector, sample from the posterior p(weights|data) to get calibrated uncertainty estimates.
+### 3.2 Bayesian Uncertainty Quantification
 
-**Demo**: `cargo run --release --features gpu --bin bayesian-uncertainty`
+Rather than finding a single weight vector, sampling from the posterior p(weights|data) provides calibrated uncertainty estimates.
 
-```
-Testing predictions with uncertainty from posterior samples:
+**Experiment**: Neural network regression with posterior sampling.
 
-    x1     x2   y_true     y_mean      y_std     region
---------------------------------------------------------------
-  0.00   0.00      0.0     0.0603     0.0516   training  ← confident
-  0.50   0.50      0.5     0.3996     0.4492     interp  ← uncertain
-  2.00   0.00        ?     0.7449     0.3395     extrap  ← very uncertain
-```
+| Region | Mean Prediction | Std Dev | Interpretation |
+|--------|-----------------|---------|----------------|
+| Training data | 0.06 | 0.05 | High confidence |
+| Interpolation | 0.40 | 0.45 | Moderate uncertainty |
+| Extrapolation | 0.74 | 0.34 | Low confidence |
 
-Key insight: uncertainty tells you WHERE the model is confident. Training points show low std (~0.05), extrapolation shows high std (~0.35).
+The uncertainty correctly reflects epistemic confidence: low in training regions, high in extrapolation.
 
-### 3. Parallel Tempering (Replica Exchange)
+### 3.3 Parallel Tempering (Replica Exchange)
 
-Run multiple replicas at different temperatures. Hot replicas explore globally; cold replicas exploit locally. Periodic swaps transfer good solutions down the temperature ladder.
+Multiple replicas at different temperatures exchange configurations periodically. Hot replicas explore globally; cold replicas exploit locally. This enables escape from local minima on rugged landscapes.
 
-**Demo**: `cargo run --release --features gpu --bin parallel-tempering`
+**Experiment**: Rastrigin function optimization.
 
-```
-Parallel Tempering vs Standard Annealing on Rastrigin:
+| Method | Best Energy Found |
+|--------|-------------------|
+| Standard Annealing | 9.18 (local minimum) |
+| Parallel Tempering | 3.15 (better basin) |
 
-Standard Annealing:  Best = 9.18 (stuck in local minimum)
-Parallel Tempering:  Best = 3.15 (found better basin)
+### 3.4 Adaptive Annealing with Reheat
 
-Winner: Parallel Tempering by 6.03
-```
+Automatic adjustment of cooling rate based on optimization progress:
+- **Convergence detection**: Accelerate cooling when near optimum
+- **Stall detection**: Slow cooling when stuck
+- **Reheating**: Escape local minima on deceptive landscapes
 
-### 4. Adaptive Annealing with Reheat
+**Experiment**: Schwefel function (global minimum at 420.97, far from origin).
 
-The `AdaptiveScheduler` automatically adjusts cooling rate based on optimization progress:
+| Schedule | Best Energy | Notes |
+|----------|-------------|-------|
+| Fixed | 118.68 | Stuck at local minimum |
+| Adaptive | 0.00 | Found global minimum (16 reheats) |
 
-- **Convergence detection**: Cools faster when near optimum
-- **Stall detection**: Slows cooling when stuck
-- **Reheating**: Escapes local minima on deceptive landscapes
+## 4. Connection to Diffusion Models
 
-**Demo**: `cargo run --release --features gpu --bin adaptive-annealing`
-
-On Schwefel (global minimum at 420.97, far from origin):
-
-```
-Fixed Schedule:    118.68 (stuck at local min)
-Adaptive Schedule: 0.00   (found global min after 16 reheats)
-```
-
-## Implementation
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    GPU Compute Shader                        │
-├─────────────────────────────────────────────────────────────┤
-│  Pass 1: Compute pairwise repulsion (O(nK) subsampling)     │
-│  Pass 2: Update particles (gradient + repulsion + noise)    │
-│  Pass 3: Extract entropy (high-T mode only)                 │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Performance Optimizations
-
-**O(nK) Subsampling**: Reduces O(n²) repulsion to O(nK) with configurable K:
-
-```
-REPULSION SAMPLING COMPARISON (1000 particles, dim=4)
-     Samples    Steps/sec      µs/step      Speedup
-        skip      10827.2         92.4         21.1x
-          64       3228.4        309.8          6.3x
-        1000        482.2       2074.0          1.0x
-```
-
-### Technology Stack
-
-- **Language**: Rust
-- **GPU**: wgpu with WGSL compute shaders
-- **Visualization**: iced GUI framework (optional `viz` feature)
-- **Parallelism**: Up to 16,000 particles at 72+ steps/sec
-
-## Expression DSL
-
-Define custom loss functions using a composable DSL that compiles to GPU-accelerated WGSL:
-
-```rust
-use temper::expr::*;
-
-// Griewank function: 1 + sum(x²/4000) - prod(cos(x/√(i+1)))
-let griewank = const_(1.0)
-    + sum_dims(|x, _| x.powi(2) / 4000.0)
-    - prod_dims(|x, i| cos(x / sqrt(i + 1.0)));
-
-// Create system with custom expression
-let mut system = ThermodynamicSystem::with_expr(500, 4, 1.0, griewank);
-```
-
-**Demo**: `cargo run --release --features gpu --bin custom-expr-demo`
-
-Available primitives:
-
-- **Variables**: `var()`, `dim_index()`, `dim_count()`, `pi()`
-- **Math**: `sin()`, `cos()`, `exp()`, `ln()`, `sqrt()`, `abs()`, `tanh()`
-- **Operators**: `+`, `-`, `*`, `/`, `.powi()`, `.powf()`
-- **Reductions**: `sum_dims(|x, i| ...)`, `prod_dims(|x, i| ...)`, `sum_pairs(|x, y| ...)`
-
-Pre-built expressions: `sphere()`, `rastrigin()`, `rosenbrock()`, `ackley()`, `griewank()`, `levy()`, `michalewicz()`, `styblinski_tang()`, `dixon_price()`, `zakharov()`, and more.
-
-## Empirical Validation
-
-### Neural Network Training
-
-| Test                  | Parameters   | Result                 |
-| --------------------- | ------------ | ---------------------- |
-| XOR MLP               | 9 (2→2→1)    | 100% accuracy          |
-| Deep MLP (circles)    | 37 (2→4→4→1) | 100% accuracy          |
-| Spiral classification | 9            | Successfully separates |
-
-**Demo**: `cargo run --release --features gpu --bin deep-nn-benchmark`
-
-### Optimization Benchmarks
-
-| Function   | Dimension | Result                                 |
-| ---------- | --------- | -------------------------------------- |
-| Sphere     | N         | Converges to origin                    |
-| Rosenbrock | N         | Finds (1,1,...,1)                      |
-| Rastrigin  | 8D        | Adaptive beats fixed by 4.96           |
-| Schwefel   | 2D        | Adaptive finds global min (16 reheats) |
-
-### Entropy Quality (T >> 1)
-
-**dieharder Statistical Tests** (all PASSED):
-
-| Test              | p-value   | Assessment |
-| ----------------- | --------- | ---------- |
-| diehard_birthdays | 0.958     | PASSED     |
-| diehard_rank_6x8  | 0.328     | PASSED     |
-| sts_serial (1-16) | 0.11-0.99 | ALL PASSED |
-| rgb_kstest_test   | 0.864     | PASSED     |
-
-**`ent` Analysis** (1MB sample):
-
-| Metric             | Value                  | Ideal  | Quality      |
-| ------------------ | ---------------------- | ------ | ------------ |
-| Entropy            | **7.999807** bits/byte | 8.0    | Near-perfect |
-| Chi-square         | 28.13%                 | 10-90% | Pass         |
-| Serial correlation | 0.0016                 | 0.0    | Near-zero    |
-
-**Demo**: `cargo run --release --features gpu --bin thermodynamic-stream | dieharder -a -g 200`
-
-## Hardware Implications
-
-The noise paradox suggests a fundamentally different approach to AI hardware:
-
-### Current Approach (Wasteful)
-
-```
-Physical Noise → Suppress → Deterministic Logic → PRNG → Synthetic Noise → AI
-```
-
-### Thermodynamic Approach (Efficient)
-
-```
-Physical Noise → Harvest → Thermodynamic Compute → AI
-```
-
-Potential implementations:
-
-1. **Analog Oscillators**: Coupled LC circuits with thermal noise as the Langevin term
-2. **Stochastic Digital ASIC**: True random number generators feeding particle updates
-3. **Thermal Memory**: Exploit rather than correct memory bit flips at elevated temperature
-
-See [HARDWARE.md](HARDWARE.md) for detailed hardware design concepts.
-
-## Available Demos
-
-| Binary                 | Description                      |
-| ---------------------- | -------------------------------- |
-| `benchmark`            | GPU performance scaling tests    |
-| `deep-nn-benchmark`    | 37-param MLP on circles          |
-| `optimizer-comparison` | Thermodynamic vs SGD vs Adam     |
-| `parallel-tempering`   | Replica exchange demo            |
-| `bayesian-sampling`    | Posterior sampling visualization |
-| `bayesian-uncertainty` | Uncertainty quantification       |
-| `mode-discovery`       | Multi-modal mode finding         |
-| `adaptive-annealing`   | Fixed vs adaptive comparison     |
-| `high-dim-benchmark`   | Dimension scaling tests          |
-| `custom-expr-demo`     | Expression DSL showcase          |
-| `thermodynamic-viz`    | Interactive visualization        |
-| `rastrigin-annealing`  | Rastrigin visualization          |
-| `schwefel-annealing`   | Schwefel visualization           |
-| `thermodynamic-stream` | Entropy streaming to stdout      |
-| `rng-demo`             | ThermodynamicRng usage           |
-| `hyperparam-tuning`    | Hyperparameter optimization      |
-| `diffusion-demo`       | Diffusion model connection       |
-
-## Public API
-
-```rust
-use temper::{
-    ThermodynamicSystem,    // GPU-accelerated particle system
-    ThermodynamicRng,       // RNG implementing rand_core::RngCore
-    AdaptiveScheduler,      // Dimension-aware temperature scheduling
-    LossFunction,           // Built-in loss functions
-    ThermodynamicParticle,  // Particle state (pos, vel, energy)
-    ThermodynamicMode,      // Operating mode enum
-    ThermodynamicStats,     // System statistics
-    RngCore,                // Re-exported from rand_core
-};
-
-use temper::expr::*;        // Expression DSL
-```
-
-## Connection to Existing Work
-
-### Known Foundations
-
-- **Langevin Dynamics** (1908): The update equation is standard statistical mechanics
-- **Simulated Annealing** (1983): Temperature-controlled exploration for optimization
-- **SVGD** (Liu & Wang, 2016): Particle-based variational inference with kernel repulsion
-- **Parallel Tempering** (1986): Replica exchange for enhanced sampling
-
-### Novel Contributions
-
-1. **Unified framework**: Same codebase performs optimization, sampling, AND entropy generation
-2. **Temperature as computation selector**: Smooth transitions between modes
-3. **Noise paradox insight**: Harvesting rather than fighting physical noise
-4. **Expression DSL**: Composable loss functions compiling to GPU shaders
-5. **Adaptive scheduling**: Dimension-aware annealing with automatic reheat
-
-## Diffusion Model Connection
-
-**Key Insight**: Temper's Langevin dynamics IS the reverse diffusion process used in score-based generative models (DDPM, score matching, etc.)
-
-### The Mathematical Equivalence
+### 4.1 Mathematical Equivalence
 
 Diffusion models sample using the score function:
 
-```
-x_{t-1} = x_t + ε·∇log p(x) + √(2ε)·z
-```
+$$x_{t-1} = x_t + \epsilon \cdot \nabla \log p(x) + \sqrt{2\epsilon} \cdot z$$
 
 Temper's Langevin dynamics:
 
-```
-dx = -γ·∇E(x)·dt + √(2γT)·dW
-```
+$$dx = -\gamma \cdot \nabla E(x) \cdot dt + \sqrt{2\gamma T} \cdot dW$$
 
 These are **identical** when:
-
 - E(x) = -log p(x) (energy = negative log probability)
 - Score function s(x) = ∇log p(x) = -∇E(x)
 - Temperature T corresponds to noise level σ²
 
-### Temperature Annealing = Reverse Diffusion
+### 4.2 Temperature Annealing as Reverse Diffusion
 
-| Diffusion Model        | Temper                    |
-| ---------------------- | ------------------------- |
-| t = T (pure noise)     | T >> 1 (high temperature) |
-| t → 0 (clean samples)  | T → 0 (low temperature)   |
-| Denoising timestep     | Cooling schedule          |
-| Learned score s_θ(x,t) | Analytical -∇E(x)         |
+| Diffusion Model | Thermodynamic System |
+|-----------------|---------------------|
+| t = T (pure noise) | T >> 1 (high temperature) |
+| t → 0 (clean samples) | T → 0 (low temperature) |
+| Denoising timestep | Cooling schedule |
+| Learned score s_θ(x,t) | Analytical -∇E(x) |
 
-**Demo**: `cargo run --release --features gpu --bin diffusion-demo`
+This equivalence suggests that diffusion models are a special case of thermodynamic computation where the energy function is learned rather than specified analytically.
 
-```
-Diffusion Progress:
-t=1000 (T=10.0)  → Pure noise
-t=600  (T=1.2)   → Noisy structure emerging
-t=200  (T=0.14)  → Clear modes visible
-t=0    (T=0.05)  → Final samples from target distribution
+## 5. Empirical Validation
 
-8D Denoising: Found 250/256 hypercube modes
-```
+### 5.1 Neural Network Training
 
-### Implications
+| Architecture | Parameters | Task | Result |
+|--------------|------------|------|--------|
+| 2→2→1 MLP | 9 | XOR | 100% accuracy |
+| 2→4→4→1 MLP | 37 | Circles | 100% accuracy |
+| 2→2→1 MLP | 9 | Spiral | Successful separation |
 
-1. **Unified Theory**: Diffusion models are a special case of thermodynamic computation
-2. **Hardware Path**: Physical thermal noise → Natural diffusion sampling
-3. **No Score Network Needed**: For known energy functions, use analytical gradients
+### 5.2 Optimization Benchmarks
 
-## Future Directions
+| Function | Dimension | Result |
+|----------|-----------|--------|
+| Sphere | N | Converges to origin |
+| Rosenbrock | N | Finds (1,1,...,1) |
+| Rastrigin | 8D | Adaptive beats fixed by 4.96 |
+| Schwefel | 2D | Adaptive finds global minimum |
 
-1. **Larger neural networks**: Scale beyond 37 parameters to practical networks
-2. **Python bindings**: PyO3 wrapper for ML ecosystem integration
-3. **WebGPU demo**: Browser-based interactive visualization
-4. **Hardware prototypes**: Analog or stochastic digital implementations
-5. **Image diffusion**: Apply to actual image generation tasks
+### 5.3 Entropy Quality (T >> 1)
 
-## Conclusion
+Statistical testing of entropy output using dieharder test suite:
+
+| Test | p-value | Assessment |
+|------|---------|------------|
+| diehard_birthdays | 0.958 | PASSED |
+| diehard_rank_6x8 | 0.328 | PASSED |
+| sts_serial (1-16) | 0.11-0.99 | ALL PASSED |
+| rgb_kstest_test | 0.864 | PASSED |
+
+Information-theoretic analysis (1MB sample):
+
+| Metric | Value | Ideal | Quality |
+|--------|-------|-------|---------|
+| Entropy | 7.999807 bits/byte | 8.0 | Near-perfect |
+| Chi-square | 28.13% | 10-90% | Pass |
+| Serial correlation | 0.0016 | 0.0 | Near-zero |
+
+## 6. The Noise Paradox and Hardware Implications
+
+Current computing hardware expends significant energy suppressing physical noise (thermal fluctuations, shot noise, etc.), then synthesizes artificial noise using PRNGs for stochastic algorithms. This represents a fundamental inefficiency.
+
+### Current Paradigm (Wasteful)
+
+Physical Noise → Suppress → Deterministic Logic → PRNG → Synthetic Noise → AI
+
+### Thermodynamic Paradigm (Efficient)
+
+Physical Noise → Harvest → Thermodynamic Compute → AI
+
+Potential hardware implementations:
+1. **Analog oscillators**: Coupled LC circuits with thermal noise as the Langevin term
+2. **Stochastic digital ASIC**: True random number generators feeding particle updates
+3. **Thermal memory**: Exploit rather than correct memory bit flips at elevated temperature
+
+## 7. Related Work
+
+### 7.1 Established Foundations
+
+- **Langevin Dynamics** (1908): The update equation derives from statistical mechanics
+- **Simulated Annealing** (Kirkpatrick et al., 1983): Temperature-controlled exploration for optimization
+- **SVGD** (Liu & Wang, 2016): Particle-based variational inference with kernel repulsion
+- **Parallel Tempering** (Swendsen & Wang, 1986): Replica exchange for enhanced sampling
+
+### 7.2 Novel Contributions
+
+1. **Unified framework**: Single system performs optimization, sampling, and entropy generation
+2. **Temperature as computation selector**: Continuous interpolation between modes
+3. **Noise paradox**: Framing physical noise as computational resource rather than obstacle
+4. **Adaptive scheduling**: Dimension-aware annealing with automatic reheat detection
+
+## 8. Conclusion
 
 We have demonstrated that a single interacting particle system, controlled solely by temperature, can correctly perform optimization, Bayesian sampling, and entropy generation. The SVGD repulsion term is crucial—it prevents mode collapse and enables capabilities impossible with gradient descent alone:
 
-- **Find ALL modes** of multimodal distributions
+- **Find all modes** of multimodal distributions
 - **Quantify uncertainty** through posterior sampling
 - **Escape local minima** via parallel tempering and adaptive reheat
 - **Generate entropy** from chaotic high-temperature dynamics
 
-The noise paradox reveals the inefficiency of current AI hardware: we suppress physical noise, then simulate it back. Thermodynamic computing offers a path to hardware that _embraces_ noise as a computational resource.
+The noise paradox reveals an inefficiency in current AI hardware: we suppress physical noise, then simulate it back. Thermodynamic computing offers a path to hardware that embraces noise as a computational resource.
 
-Temperature isn't just a hyperparameter—it's a **computation selector** that smoothly interpolates between deterministic optimization and stochastic exploration. This is one algorithm, not three.
+Temperature is not merely a hyperparameter—it is a **computation selector** that smoothly interpolates between deterministic optimization and stochastic exploration. This represents a unification: one algorithm, not three.
 
----
+## References
 
-_Temper: GPU-accelerated unified thermodynamic particle systems._
-_Run `cargo run --release --features gpu --bin benchmark` to see it in action._
+1. Kirkpatrick, S., Gelatt, C. D., & Vecchi, M. P. (1983). Optimization by simulated annealing. *Science*, 220(4598), 671-680.
+
+2. Liu, Q., & Wang, D. (2016). Stein variational gradient descent: A general purpose Bayesian inference algorithm. *Advances in Neural Information Processing Systems*, 29.
+
+3. Swendsen, R. H., & Wang, J. S. (1986). Replica Monte Carlo simulation of spin-glasses. *Physical Review Letters*, 57(21), 2607.
+
+4. Ho, J., Jain, A., & Abbeel, P. (2020). Denoising diffusion probabilistic models. *Advances in Neural Information Processing Systems*, 33.
+
+5. Song, Y., & Ermon, S. (2019). Generative modeling by estimating gradients of the data distribution. *Advances in Neural Information Processing Systems*, 32.
