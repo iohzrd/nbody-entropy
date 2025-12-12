@@ -903,6 +903,165 @@ pub struct ThermodynamicStats {
     pub temperature: f32,
 }
 
+/// Population diversity metrics for analyzing particle distribution
+#[derive(Debug, Clone)]
+pub struct DiversityMetrics {
+    /// Mean pairwise distance between particles (higher = more diverse)
+    pub mean_pairwise_distance: f32,
+    /// Standard deviation of pairwise distances
+    pub distance_std: f32,
+    /// Energy variance across population
+    pub energy_variance: f32,
+    /// Effective sample size (ESS) - accounts for correlation
+    pub effective_sample_size: f32,
+    /// Estimated number of distinct modes (clusters)
+    pub estimated_modes: usize,
+    /// Coverage: fraction of bounding box occupied
+    pub coverage: f32,
+    /// Dimension used for computation
+    pub dim: usize,
+}
+
+impl ThermodynamicSystem {
+    /// Compute comprehensive diversity metrics for the current population
+    ///
+    /// These metrics help assess:
+    /// - Population diversity (mean_pairwise_distance)
+    /// - Mode discovery (estimated_modes)
+    /// - Sampling quality (effective_sample_size)
+    pub fn diversity_metrics(&self) -> DiversityMetrics {
+        let particles = self.read_particles();
+        let n = particles.len();
+        let dim = self.dim;
+
+        // Sample particles for efficiency (use at most 500 for O(n²) operations)
+        let sample_size = n.min(500);
+        let step = if n > sample_size { n / sample_size } else { 1 };
+
+        // Collect sampled particles
+        let sampled: Vec<_> = particles.iter().step_by(step).take(sample_size).collect();
+        let m = sampled.len();
+
+        // Compute pairwise distances
+        let mut distances = Vec::new();
+        for i in 0..m {
+            for j in (i + 1)..m {
+                let mut dist_sq = 0.0f32;
+                for d in 0..dim {
+                    let diff = sampled[i].pos[d].to_f32() - sampled[j].pos[d].to_f32();
+                    dist_sq += diff * diff;
+                }
+                distances.push(dist_sq.sqrt());
+            }
+        }
+
+        let mean_dist = if !distances.is_empty() {
+            distances.iter().sum::<f32>() / distances.len() as f32
+        } else {
+            0.0
+        };
+
+        let dist_var = if !distances.is_empty() {
+            distances
+                .iter()
+                .map(|d| (d - mean_dist).powi(2))
+                .sum::<f32>()
+                / distances.len() as f32
+        } else {
+            0.0
+        };
+
+        // Energy statistics
+        let energies: Vec<f32> = particles
+            .iter()
+            .filter(|p| !p.energy.is_nan() && p.energy.is_finite())
+            .map(|p| p.energy)
+            .collect();
+
+        let mean_energy = energies.iter().sum::<f32>() / energies.len().max(1) as f32;
+        let energy_var = energies
+            .iter()
+            .map(|e| (e - mean_energy).powi(2))
+            .sum::<f32>()
+            / energies.len().max(1) as f32;
+
+        // Effective sample size using energy-based weights
+        // ESS = (sum w_i)² / sum w_i²
+        let min_energy = energies.iter().cloned().fold(f32::MAX, f32::min);
+        let weights: Vec<f32> = energies
+            .iter()
+            .map(|e| (-(e - min_energy) / self.temperature.max(0.001)).exp())
+            .collect();
+        let sum_w: f32 = weights.iter().sum();
+        let sum_w_sq: f32 = weights.iter().map(|w| w * w).sum();
+        let ess = if sum_w_sq > 0.0 {
+            (sum_w * sum_w / sum_w_sq).min(n as f32)
+        } else {
+            1.0
+        };
+
+        // Estimate number of modes using simple clustering
+        // Count particles below energy threshold as distinct if far apart
+        let energy_threshold = min_energy + energy_var.sqrt();
+        let low_energy: Vec<_> = sampled
+            .iter()
+            .filter(|p| !p.energy.is_nan() && p.energy < energy_threshold)
+            .collect();
+
+        let mut modes = 0usize;
+        let mode_dist_threshold = mean_dist * 0.3; // Modes must be at least 30% of mean dist apart
+        let mut mode_centers: Vec<Vec<f32>> = Vec::new();
+
+        for p in &low_energy {
+            let pos: Vec<f32> = (0..dim).map(|d| p.pos[d].to_f32()).collect();
+            let is_new_mode = mode_centers.iter().all(|center| {
+                let dist: f32 = pos
+                    .iter()
+                    .zip(center.iter())
+                    .map(|(a, b)| (a - b).powi(2))
+                    .sum::<f32>()
+                    .sqrt();
+                dist > mode_dist_threshold
+            });
+            if is_new_mode {
+                modes += 1;
+                mode_centers.push(pos);
+            }
+        }
+
+        // Coverage: compute bounding box and estimate volume ratio
+        let mut min_pos = vec![f32::MAX; dim];
+        let mut max_pos = vec![f32::MIN; dim];
+        for p in &sampled {
+            for d in 0..dim {
+                let v = p.pos[d].to_f32();
+                min_pos[d] = min_pos[d].min(v);
+                max_pos[d] = max_pos[d].max(v);
+            }
+        }
+
+        // Coverage = product of ranges / expected range (assume [-4, 4] initialization)
+        let expected_range = 8.0f32; // [-4, 4]
+        let mut coverage = 1.0f32;
+        for d in 0..dim.min(8) {
+            // Only use first 8 dims to avoid numerical issues
+            let range = (max_pos[d] - min_pos[d]).max(0.001);
+            coverage *= (range / expected_range).min(1.0);
+        }
+        coverage = coverage.powf(1.0 / dim.min(8) as f32); // Geometric mean
+
+        DiversityMetrics {
+            mean_pairwise_distance: mean_dist,
+            distance_std: dist_var.sqrt(),
+            energy_variance: energy_var,
+            effective_sample_size: ess,
+            estimated_modes: modes.max(1),
+            coverage,
+            dim,
+        }
+    }
+}
+
 /// Adaptive temperature scheduler for simulated annealing
 ///
 /// Adjusts cooling rate based on optimization progress:
