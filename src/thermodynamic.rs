@@ -59,7 +59,7 @@ impl ThermodynamicMode {
     }
 }
 
-const MAX_DIMENSIONS: usize = 256;
+const MAX_DIMENSIONS: usize = 1024;
 const MAX_PARTICLES: usize = 500_000; // Support up to 500k particles (GPU memory dependent)
 
 // F16 position update code for shader specialization (replaces runtime branching)
@@ -119,14 +119,14 @@ fn specialize_shader(base_shader: &str, use_f16: bool) -> String {
 /// Particle state in the thermodynamic system
 ///
 /// Uses f16 for positions to match GPU memory layout directly.
-/// Size: 256*2 + 4 + 4 = 520 bytes
-/// MAX_DIMENSIONS=256 supports networks up to ~250 parameters
+/// Size: 1024*2 + 4 + 4 = 2056 bytes
+/// MAX_DIMENSIONS=1024 supports networks up to ~1000 parameters or RGB images
 ///
 /// To convert positions to f32 for computation: `p.pos[d].to_f32()`
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct ThermodynamicParticle {
-    pub pos: [f16; MAX_DIMENSIONS], // 512 bytes
+    pub pos: [f16; MAX_DIMENSIONS], // 2048 bytes
     pub energy: f32,                // 4 bytes
     pub entropy_bits: u32,          // 4 bytes
 }

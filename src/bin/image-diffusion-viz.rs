@@ -454,7 +454,7 @@ fn generate_checkerboard_pattern() -> Vec<f32> {
 
 fn generate_circle_wgsl() -> temper::expr::Expr {
     let loss_code = r#"
-fn custom_loss(pos: array<f32, 256>, dim: u32) -> f32 {
+fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
     let size = 16.0;
     let center = size / 2.0;
     let radius = size / 3.0;
@@ -477,7 +477,7 @@ fn custom_loss(pos: array<f32, 256>, dim: u32) -> f32 {
 "#;
 
     let grad_code = r#"
-fn custom_gradient(pos: array<f32, 256>, dim: u32, d_idx: u32) -> f32 {
+fn custom_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
     let size = 16.0;
     let center = size / 2.0;
     let radius = size / 3.0;
@@ -499,7 +499,7 @@ fn custom_gradient(pos: array<f32, 256>, dim: u32, d_idx: u32) -> f32 {
 
 fn generate_cross_wgsl() -> temper::expr::Expr {
     let loss_code = r#"
-fn custom_loss(pos: array<f32, 256>, dim: u32) -> f32 {
+fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
     var mse = 0.0;
     for (var i = 0u; i < 256u; i = i + 1u) {
         let y = i / 16u;
@@ -520,7 +520,7 @@ fn custom_loss(pos: array<f32, 256>, dim: u32) -> f32 {
 "#;
 
     let grad_code = r#"
-fn custom_gradient(pos: array<f32, 256>, dim: u32, d_idx: u32) -> f32 {
+fn custom_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
     let y = d_idx / 16u;
     let x = d_idx % 16u;
 
@@ -540,7 +540,7 @@ fn custom_gradient(pos: array<f32, 256>, dim: u32, d_idx: u32) -> f32 {
 
 fn generate_checkerboard_wgsl() -> temper::expr::Expr {
     let loss_code = r#"
-fn custom_loss(pos: array<f32, 256>, dim: u32) -> f32 {
+fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
     var mse = 0.0;
     for (var i = 0u; i < 256u; i = i + 1u) {
         let y = i / 16u;
@@ -561,7 +561,7 @@ fn custom_loss(pos: array<f32, 256>, dim: u32) -> f32 {
 "#;
 
     let grad_code = r#"
-fn custom_gradient(pos: array<f32, 256>, dim: u32, d_idx: u32) -> f32 {
+fn custom_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
     let y = d_idx / 16u;
     let x = d_idx % 16u;
 

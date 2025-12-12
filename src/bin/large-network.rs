@@ -6,7 +6,7 @@
 //! - Task: 4-class classification on synthetic data
 //!
 //! This demonstrates the system's ability to optimize in high-dimensional
-//! parameter spaces, pushing close to the MAX_DIMENSIONS=256 limit.
+//! parameter spaces. MAX_DIMENSIONS is now 1024, supporting much larger networks.
 
 use std::time::Instant;
 use temper::ThermodynamicSystem;
@@ -256,7 +256,7 @@ fn build_nn_loss(dataset: &[Sample]) -> temper::expr::Expr {
     let mut grad_code = String::new();
 
     // Generate loss function
-    loss_code.push_str("fn custom_loss(pos: array<f32, 256>, dim: u32) -> f32 {\n");
+    loss_code.push_str("fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {\n");
     loss_code.push_str("    var total_loss = 0.0;\n\n");
 
     // Embed dataset as constants (use 40 samples for faster shader compilation)
@@ -330,7 +330,8 @@ fn build_nn_loss(dataset: &[Sample]) -> temper::expr::Expr {
     loss_code.push_str("}\n");
 
     // Numerical gradient (simpler than analytical for this size)
-    grad_code.push_str("fn custom_gradient(pos: array<f32, 256>, dim: u32, d_idx: u32) -> f32 {\n");
+    grad_code
+        .push_str("fn custom_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {\n");
     grad_code.push_str(&format!("    if d_idx >= {}u {{\n", DIM));
     grad_code.push_str("        return 0.0;\n");
     grad_code.push_str("    }\n");

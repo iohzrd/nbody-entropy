@@ -4,24 +4,6 @@
 
 We demonstrate that a single GPU-accelerated interacting particle system can perform three fundamentally different computations—**optimization**, **Bayesian inference**, and **entropy generation**—controlled solely by a temperature parameter. This suggests that thermodynamic particle dynamics may serve as a universal computational primitive, with temperature selecting the type of computation performed.
 
-## The Noise Paradox
-
-Modern AI has a peculiar relationship with randomness:
-
-1. **AI needs noise**: Dropout, stochastic gradient descent, diffusion models, MCMC sampling, exploration in RL—noise is _essential_ to modern machine learning.
-
-2. **Hardware fights noise**: Traditional IC design spends enormous effort suppressing thermal noise, using error correction, and ensuring deterministic operation.
-
-3. **Then we simulate it back**: After building perfectly deterministic hardware, we run PRNGs and add synthetic noise to our computations.
-
-This is deeply inefficient. We're:
-
-- Paying power costs to suppress physical noise
-- Paying compute costs to generate synthetic noise
-- Getting _worse_ randomness than physics provides for free
-
-**Temper cuts through this paradox** by using physical dynamics directly. At high temperature, particle motion _is_ the noise source. We don't suppress thermal fluctuations—we _harvest_ them.
-
 ## Core Thesis
 
 > **Interacting particle systems with pairwise repulsion are a universal computational primitive. Temperature selects what computation you're doing:**
