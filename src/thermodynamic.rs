@@ -62,6 +62,60 @@ impl ThermodynamicMode {
 const MAX_DIMENSIONS: usize = 256;
 const MAX_PARTICLES: usize = 500_000; // Support up to 500k particles (GPU memory dependent)
 
+// F16 position update code for shader specialization (replaces runtime branching)
+const F16_POSITION_UPDATE: &str = r#"
+        // F16 COMPUTE PATH - all position arithmetic in f16
+        let grad_f16 = f16(grad_clipped);
+        let gamma_f16 = f16(uniforms.gamma);
+        let dt_f16 = f16(uniforms.dt);
+        let rep_scale_f16 = f16(repulsion_scale);
+        let noise_scale_f16 = f16(noise_scale);
+        let noise_f16 = f16(noise);
+
+        // Update directly in f16
+        let grad_term_f16 = -gamma_f16 * grad_f16;
+        let repulsion_term_f16 = repulsion[idx].pos[d] * rep_scale_f16;
+        let noise_term_f16 = noise_scale_f16 * noise_f16;
+
+        var new_pos_f16 = p.pos[d] + (grad_term_f16 + repulsion_term_f16) * dt_f16 + noise_term_f16;
+
+        // Clamp in f16
+        if uniforms.loss_fn == 9u {
+            new_pos_f16 = clamp(new_pos_f16, f16(-500.0), f16(500.0));
+        } else {
+            new_pos_f16 = clamp(new_pos_f16, f16(-5.0), f16(5.0));
+        }
+
+        p.pos[d] = new_pos_f16;
+        pos_f32[d] = f32(new_pos_f16); // For entropy extraction
+"#;
+
+/// Generate shader with f16 or f32 position update code (compile-time specialization)
+fn specialize_shader(base_shader: &str, use_f16: bool) -> String {
+    if !use_f16 {
+        // F32 is the default in the shader, no replacement needed
+        return base_shader.to_string();
+    }
+
+    // Find and replace the position update code markers
+    let start_marker = "// POSITION_UPDATE_CODE_START";
+    let end_marker = "// POSITION_UPDATE_CODE_END";
+
+    if let Some(start_idx) = base_shader.find(start_marker) {
+        if let Some(end_idx) = base_shader.find(end_marker) {
+            let before = &base_shader[..start_idx];
+            let after = &base_shader[end_idx + end_marker.len()..];
+            return format!(
+                "{}// F16 COMPUTE (compile-time specialized)\n{}{}",
+                before, F16_POSITION_UPDATE, after
+            );
+        }
+    }
+
+    // Fallback: return unmodified
+    base_shader.to_string()
+}
+
 /// Particle state in the thermodynamic system
 ///
 /// Uses f16 for positions to match GPU memory layout directly.
@@ -234,9 +288,11 @@ impl ThermodynamicSystem {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
+        // Use f32 compute by default (no shader specialization needed)
+        let base_shader = include_str!("shaders/thermodynamic.wgsl");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("thermodynamic"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/thermodynamic.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(base_shader.into()),
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -370,6 +426,256 @@ impl ThermodynamicSystem {
         let mut sys = Self::new(particle_count, dim, temperature);
         sys.set_loss_function(loss_fn);
         sys
+    }
+
+    /// Create with f16 compute enabled (compile-time shader specialization)
+    ///
+    /// This uses f16 arithmetic for position updates, which can be faster on GPUs
+    /// with native f16 support (NVIDIA RTX, AMD RDNA2+, Intel Arc).
+    ///
+    /// Note: f16 compute is a compile-time setting. The shader is specialized
+    /// at creation time, so this cannot be changed after creation.
+    pub fn with_f16_compute(
+        particle_count: usize,
+        dim: usize,
+        temperature: f32,
+        loss_fn: LossFunction,
+    ) -> Self {
+        Self::new_internal(particle_count, dim, temperature, loss_fn, true)
+    }
+
+    /// Internal constructor with all options
+    fn new_internal(
+        particle_count: usize,
+        dim: usize,
+        temperature: f32,
+        loss_fn: LossFunction,
+        use_f16_compute: bool,
+    ) -> Self {
+        assert!(particle_count <= MAX_PARTICLES);
+        assert!(dim <= MAX_DIMENSIONS);
+
+        // Initialize particles randomly in [-4, 4]
+        let mut particles = vec![ThermodynamicParticle::default(); particle_count];
+
+        let mut seed = 42u64;
+        for p in particles.iter_mut() {
+            for d in 0..dim {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                let val = -4.0 + (seed & 0xFFFF) as f32 / 65535.0 * 8.0;
+                p.pos[d] = f16::from_f32(val);
+            }
+        }
+
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..Default::default()
+        });
+
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        }))
+        .expect("No GPU adapter found");
+
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features: wgpu::Features::SHADER_F16,
+            ..Default::default()
+        }))
+        .expect("Failed to create device with f16 support");
+
+        let particle_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("particles"),
+            contents: bytemuck::cast_slice(&particles),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        });
+
+        let repulsion_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("repulsion"),
+            size: (particle_count * std::mem::size_of::<ThermodynamicParticle>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+
+        let entropy_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("entropy"),
+            size: (particle_count * 4) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("staging"),
+            size: (particle_count * std::mem::size_of::<ThermodynamicParticle>()) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let entropy_staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("entropy_staging"),
+            size: (particle_count * 4) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let (gamma, repulsion_strength, kernel_bandwidth, dt) =
+            Self::params_for_temperature(temperature, dim);
+        let repulsion_samples = if temperature < 0.01 { 0 } else { 64 };
+
+        let uniforms = Uniforms {
+            particle_count: particle_count as u32,
+            dim: dim as u32,
+            gamma,
+            temperature,
+            repulsion_strength,
+            kernel_bandwidth,
+            dt,
+            seed: 12345,
+            mode: ThermodynamicMode::from_temperature(temperature) as u32,
+            loss_fn: loss_fn as u32,
+            repulsion_samples,
+            use_f16_compute: if use_f16_compute { 1 } else { 0 },
+        };
+
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("uniforms"),
+            contents: bytemuck::bytes_of(&uniforms),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // Compile-time shader specialization for f16/f32
+        let base_shader = include_str!("shaders/thermodynamic.wgsl");
+        let specialized_shader = specialize_shader(base_shader, use_f16_compute);
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(if use_f16_compute {
+                "thermodynamic_f16"
+            } else {
+                "thermodynamic_f32"
+            }),
+            source: wgpu::ShaderSource::Wgsl(specialized_shader.into()),
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("thermodynamic_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("thermodynamic_bind_group"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: particle_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: repulsion_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: entropy_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("thermodynamic_pipeline_layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let repulsion_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("repulsion_pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("compute_repulsion"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        let update_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("update_pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("update_particles"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        Self {
+            device,
+            queue,
+            particle_buffer,
+            repulsion_buffer,
+            entropy_buffer,
+            staging_buffer,
+            entropy_staging,
+            uniform_buffer,
+            repulsion_pipeline,
+            update_pipeline,
+            bind_group,
+            particle_count,
+            dim,
+            temperature,
+            gamma,
+            repulsion_strength,
+            kernel_bandwidth,
+            dt,
+            step: 0,
+            loss_fn,
+            repulsion_samples,
+            use_f16_compute,
+            entropy_pool: Vec::new(),
+            custom_loss_wgsl: None,
+        }
     }
 
     /// Create with a custom expression-based loss function
@@ -700,20 +1006,7 @@ impl ThermodynamicSystem {
         self.repulsion_samples
     }
 
-    /// Enable or disable f16 compute for position updates
-    ///
-    /// When enabled, position arithmetic is performed in f16 (half precision)
-    /// instead of f32. This can be faster on GPUs with good f16 acceleration
-    /// (NVIDIA Tensor Cores, AMD RDNA2+) but has lower precision (~3 decimal digits).
-    ///
-    /// Loss and gradient computations remain in f32 for numerical stability.
-    ///
-    /// Default: false (f32 compute)
-    pub fn set_f16_compute(&mut self, enabled: bool) {
-        self.use_f16_compute = enabled;
-    }
-
-    /// Check if f16 compute is enabled
+    /// Check if f16 compute is enabled (compile-time setting)
     pub fn f16_compute(&self) -> bool {
         self.use_f16_compute
     }

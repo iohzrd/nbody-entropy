@@ -827,51 +827,25 @@ fn update_particles(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Clip large gradients to prevent explosion (esp. for Rosenbrock)
         let grad_clipped = clamp(grad, -10.0, 10.0);
 
-        // Branch based on f16 compute mode
-        if uniforms.use_f16_compute == 1u {
-            // F16 COMPUTE PATH - all position arithmetic in f16
-            let grad_f16 = f16(grad_clipped);
-            let gamma_f16 = f16(uniforms.gamma);
-            let dt_f16 = f16(uniforms.dt);
-            let rep_scale_f16 = f16(repulsion_scale);
-            let noise_scale_f16 = f16(noise_scale);
-            let noise_f16 = f16(noise);
+        // POSITION_UPDATE_CODE_START (replaced at compile time for f16/f32 variants)
+        // F32 COMPUTE PATH (default)
+        let grad_term = -uniforms.gamma * grad_clipped;
+        let repulsion_term = f32(repulsion[idx].pos[d]) * repulsion_scale;
+        let noise_term = noise_scale * noise;
 
-            // Update directly in f16
-            let grad_term_f16 = -gamma_f16 * grad_f16;
-            let repulsion_term_f16 = repulsion[idx].pos[d] * rep_scale_f16;
-            let noise_term_f16 = noise_scale_f16 * noise_f16;
+        // Update position in f32
+        pos_f32[d] = pos_f32[d] + (grad_term + repulsion_term) * uniforms.dt + noise_term;
 
-            var new_pos_f16 = p.pos[d] + (grad_term_f16 + repulsion_term_f16) * dt_f16 + noise_term_f16;
-
-            // Clamp in f16
-            if uniforms.loss_fn == 9u {
-                new_pos_f16 = clamp(new_pos_f16, f16(-500.0), f16(500.0));
-            } else {
-                new_pos_f16 = clamp(new_pos_f16, f16(-5.0), f16(5.0));
-            }
-
-            p.pos[d] = new_pos_f16;
-            pos_f32[d] = f32(new_pos_f16); // For entropy extraction
+        // Clamp based on loss function (Schwefel needs larger domain)
+        if uniforms.loss_fn == 9u {
+            pos_f32[d] = clamp(pos_f32[d], -500.0, 500.0);
         } else {
-            // F32 COMPUTE PATH (original)
-            let grad_term = -uniforms.gamma * grad_clipped;
-            let repulsion_term = f32(repulsion[idx].pos[d]) * repulsion_scale;
-            let noise_term = noise_scale * noise;
-
-            // Update position in f32
-            pos_f32[d] = pos_f32[d] + (grad_term + repulsion_term) * uniforms.dt + noise_term;
-
-            // Clamp based on loss function (Schwefel needs larger domain)
-            if uniforms.loss_fn == 9u {
-                pos_f32[d] = clamp(pos_f32[d], -500.0, 500.0);
-            } else {
-                pos_f32[d] = clamp(pos_f32[d], -5.0, 5.0);
-            }
-
-            // Write back as f16
-            p.pos[d] = f16(pos_f32[d]);
+            pos_f32[d] = clamp(pos_f32[d], -5.0, 5.0);
         }
+
+        // Write back as f16
+        p.pos[d] = f16(pos_f32[d]);
+        // POSITION_UPDATE_CODE_END
     }
 
     // ENTROPY EXTRACTION (at high temperature)

@@ -74,7 +74,7 @@ fn benchmark_performance() {
     println!("  {}", "-".repeat(60));
 
     for &dim in &dimensions {
-        // F32 compute benchmark
+        // F32 compute benchmark (default)
         let mut system_f32 = ThermodynamicSystem::with_loss_function(
             particle_count,
             dim,
@@ -82,7 +82,6 @@ fn benchmark_performance() {
             LossFunction::Sphere,
         );
         system_f32.set_repulsion_samples(0);
-        system_f32.set_f16_compute(false);
 
         // Warmup
         for _ in 0..20 {
@@ -96,15 +95,10 @@ fn benchmark_performance() {
         let elapsed_f32 = start_f32.elapsed();
         let rate_f32 = steps as f64 / elapsed_f32.as_secs_f64();
 
-        // F16 compute benchmark
-        let mut system_f16 = ThermodynamicSystem::with_loss_function(
-            particle_count,
-            dim,
-            0.01,
-            LossFunction::Sphere,
-        );
+        // F16 compute benchmark (compile-time specialized shader)
+        let mut system_f16 =
+            ThermodynamicSystem::with_f16_compute(particle_count, dim, 0.01, LossFunction::Sphere);
         system_f16.set_repulsion_samples(0);
-        system_f16.set_f16_compute(true);
 
         // Warmup
         for _ in 0..20 {
@@ -157,11 +151,10 @@ fn benchmark_quality() {
     );
     println!("  {}", "-".repeat(60));
 
-    // F32 optimization
+    // F32 optimization (default)
     let mut system_f32 =
         ThermodynamicSystem::with_loss_function(particle_count, dim, 2.0, LossFunction::Rastrigin);
     system_f32.set_repulsion_samples(32);
-    system_f32.set_f16_compute(false);
 
     let mut best_f32 = f32::MAX;
     for step in 0..steps {
@@ -201,11 +194,10 @@ fn benchmark_quality() {
         "F32", final_f32, best_f32, valid_f32
     );
 
-    // F16 optimization
+    // F16 optimization (compile-time specialized)
     let mut system_f16 =
-        ThermodynamicSystem::with_loss_function(particle_count, dim, 2.0, LossFunction::Rastrigin);
+        ThermodynamicSystem::with_f16_compute(particle_count, dim, 2.0, LossFunction::Rastrigin);
     system_f16.set_repulsion_samples(32);
-    system_f16.set_f16_compute(true);
 
     let mut best_f16 = f32::MAX;
     for step in 0..steps {
@@ -280,11 +272,10 @@ fn benchmark_loss_functions() {
     println!("  {}", "-".repeat(55));
 
     for (name, loss_fn) in &loss_functions {
-        // F32
+        // F32 (default)
         let mut system_f32 =
             ThermodynamicSystem::with_loss_function(particle_count, dim, 2.0, loss_fn.clone());
         system_f32.set_repulsion_samples(16);
-        system_f32.set_f16_compute(false);
 
         for step in 0..steps {
             let progress = step as f32 / steps as f32;
@@ -300,11 +291,10 @@ fn benchmark_loss_functions() {
             .map(|p| p.energy)
             .fold(f32::MAX, f32::min);
 
-        // F16
+        // F16 (compile-time specialized)
         let mut system_f16 =
-            ThermodynamicSystem::with_loss_function(particle_count, dim, 2.0, loss_fn.clone());
+            ThermodynamicSystem::with_f16_compute(particle_count, dim, 2.0, loss_fn.clone());
         system_f16.set_repulsion_samples(16);
-        system_f16.set_f16_compute(true);
 
         for step in 0..steps {
             let progress = step as f32 / steps as f32;
