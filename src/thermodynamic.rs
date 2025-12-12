@@ -101,7 +101,7 @@ struct Uniforms {
     mode: u32,
     loss_fn: u32,
     repulsion_samples: u32, // 0 = skip repulsion, >0 = sample K particles (O(nK) instead of O(n²))
-    _pad: f32,
+    use_f16_compute: u32,   // 0 = f32 compute, 1 = f16 compute for position updates
 }
 
 /// Unified thermodynamic particle system
@@ -127,6 +127,7 @@ pub struct ThermodynamicSystem {
     step: u32,
     loss_fn: LossFunction,
     repulsion_samples: u32, // 0 = skip, 64 = sample 64 particles (default)
+    use_f16_compute: bool,  // true = f16 arithmetic for position updates
     // Entropy extraction
     entropy_pool: Vec<u32>,
     // Custom loss function WGSL code (if using LossFunction::Custom)
@@ -224,7 +225,7 @@ impl ThermodynamicSystem {
             mode: ThermodynamicMode::from_temperature(temperature) as u32,
             loss_fn: LossFunction::default() as u32,
             repulsion_samples,
-            _pad: 0.0,
+            use_f16_compute: 0, // Default to f32 compute
         };
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -353,6 +354,7 @@ impl ThermodynamicSystem {
             step: 0,
             loss_fn: LossFunction::default(),
             repulsion_samples,
+            use_f16_compute: false,
             entropy_pool: Vec::new(),
             custom_loss_wgsl: None,
         }
@@ -492,7 +494,7 @@ impl ThermodynamicSystem {
             mode: ThermodynamicMode::from_temperature(temperature) as u32,
             loss_fn: LossFunction::Custom as u32,
             repulsion_samples,
-            _pad: 0.0,
+            use_f16_compute: 0, // Default to f32 compute
         };
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -644,6 +646,7 @@ impl ThermodynamicSystem {
             step: 0,
             loss_fn: LossFunction::Custom,
             repulsion_samples,
+            use_f16_compute: false,
             entropy_pool: Vec::new(),
             custom_loss_wgsl: Some(full_shader),
         }
@@ -697,6 +700,24 @@ impl ThermodynamicSystem {
         self.repulsion_samples
     }
 
+    /// Enable or disable f16 compute for position updates
+    ///
+    /// When enabled, position arithmetic is performed in f16 (half precision)
+    /// instead of f32. This can be faster on GPUs with good f16 acceleration
+    /// (NVIDIA Tensor Cores, AMD RDNA2+) but has lower precision (~3 decimal digits).
+    ///
+    /// Loss and gradient computations remain in f32 for numerical stability.
+    ///
+    /// Default: false (f32 compute)
+    pub fn set_f16_compute(&mut self, enabled: bool) {
+        self.use_f16_compute = enabled;
+    }
+
+    /// Check if f16 compute is enabled
+    pub fn f16_compute(&self) -> bool {
+        self.use_f16_compute
+    }
+
     /// Set the time step (dt) for finer control over stability
     /// Smaller dt = more stable but slower convergence
     pub fn set_dt(&mut self, dt: f32) {
@@ -739,7 +760,7 @@ impl ThermodynamicSystem {
             mode: self.mode() as u32,
             loss_fn: self.loss_fn as u32,
             repulsion_samples: self.repulsion_samples,
-            _pad: 0.0,
+            use_f16_compute: if self.use_f16_compute { 1 } else { 0 },
         };
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));

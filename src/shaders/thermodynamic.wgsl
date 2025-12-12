@@ -51,7 +51,8 @@ struct Uniforms {
     loss_fn: u32,
     // Repulsion samples: 0 = skip repulsion, >0 = sample this many particles (O(nK) instead of O(n²))
     repulsion_samples: u32,
-    _pad1: f32,
+    // Use f16 compute for position updates (0=f32, 1=f16)
+    use_f16_compute: u32,
 }
 
 // Training data (same neural net task)
@@ -130,6 +131,46 @@ fn fast_exp(x: f32) -> f32 {
 fn fast_sqrt(x: f32) -> f32 {
     if x <= 0.0 { return 0.0; }
     return x * inverseSqrt(x);
+}
+
+// ============================================================================
+// F16 COMPUTE HELPERS
+// True f16 arithmetic for position updates - faster on GPUs with f16 acceleration
+// ============================================================================
+
+// Random number in f16
+fn rand_f16(seed: u32) -> f16 {
+    return f16(rand(seed));
+}
+
+// Box-Muller in f16 (less precise but faster)
+fn randn_f16(seed1: u32, seed2: u32) -> f16 {
+    let u1 = max(rand_f16(seed1), f16(0.001));
+    let u2 = rand_f16(seed2);
+    // Use f32 for transcendentals, convert result to f16
+    return f16(sqrt(-2.0 * log(f32(u1))) * cos(6.283185307 * f32(u2)));
+}
+
+// Fast sin in f16 (Bhaskara approximation)
+fn fast_sin_f16(x: f16) -> f16 {
+    let pi = f16(3.14159);
+    let two_pi = f16(6.28318);
+    let inv_two_pi = f16(0.159155);
+
+    var t = x * inv_two_pi;
+    t = t - floor(t);
+    t = t * two_pi;
+
+    if t > pi {
+        t = t - two_pi;
+    }
+
+    let t2 = t * (pi - abs(t));
+    return f16(4.0) * t2 / (f16(5.0) * pi * pi - f16(4.0) * abs(t2)) * sign(t) * sign(pi - abs(t));
+}
+
+fn fast_cos_f16(x: f16) -> f16 {
+    return fast_sin_f16(x + f16(1.5708));
 }
 
 // ============================================================================
@@ -786,24 +827,51 @@ fn update_particles(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Clip large gradients to prevent explosion (esp. for Rosenbrock)
         let grad_clipped = clamp(grad, -10.0, 10.0);
 
-        // The unified update (all arithmetic in f32)
-        let grad_term = -uniforms.gamma * grad_clipped;
-        let repulsion_term = f32(repulsion[idx].pos[d]) * repulsion_scale;
-        let noise_term = noise_scale * noise;
+        // Branch based on f16 compute mode
+        if uniforms.use_f16_compute == 1u {
+            // F16 COMPUTE PATH - all position arithmetic in f16
+            let grad_f16 = f16(grad_clipped);
+            let gamma_f16 = f16(uniforms.gamma);
+            let dt_f16 = f16(uniforms.dt);
+            let rep_scale_f16 = f16(repulsion_scale);
+            let noise_scale_f16 = f16(noise_scale);
+            let noise_f16 = f16(noise);
 
-        // Update position in f32
-        pos_f32[d] = pos_f32[d] + (grad_term + repulsion_term) * uniforms.dt + noise_term;
+            // Update directly in f16
+            let grad_term_f16 = -gamma_f16 * grad_f16;
+            let repulsion_term_f16 = repulsion[idx].pos[d] * rep_scale_f16;
+            let noise_term_f16 = noise_scale_f16 * noise_f16;
 
-        // Clamp based on loss function (Schwefel needs larger domain)
-        if uniforms.loss_fn == 9u {
-            // Schwefel: global minimum at ~420.97
-            pos_f32[d] = clamp(pos_f32[d], -500.0, 500.0);
+            var new_pos_f16 = p.pos[d] + (grad_term_f16 + repulsion_term_f16) * dt_f16 + noise_term_f16;
+
+            // Clamp in f16
+            if uniforms.loss_fn == 9u {
+                new_pos_f16 = clamp(new_pos_f16, f16(-500.0), f16(500.0));
+            } else {
+                new_pos_f16 = clamp(new_pos_f16, f16(-5.0), f16(5.0));
+            }
+
+            p.pos[d] = new_pos_f16;
+            pos_f32[d] = f32(new_pos_f16); // For entropy extraction
         } else {
-            pos_f32[d] = clamp(pos_f32[d], -5.0, 5.0);
-        }
+            // F32 COMPUTE PATH (original)
+            let grad_term = -uniforms.gamma * grad_clipped;
+            let repulsion_term = f32(repulsion[idx].pos[d]) * repulsion_scale;
+            let noise_term = noise_scale * noise;
 
-        // Write back as f16
-        p.pos[d] = f16(pos_f32[d]);
+            // Update position in f32
+            pos_f32[d] = pos_f32[d] + (grad_term + repulsion_term) * uniforms.dt + noise_term;
+
+            // Clamp based on loss function (Schwefel needs larger domain)
+            if uniforms.loss_fn == 9u {
+                pos_f32[d] = clamp(pos_f32[d], -500.0, 500.0);
+            } else {
+                pos_f32[d] = clamp(pos_f32[d], -5.0, 5.0);
+            }
+
+            // Write back as f16
+            p.pos[d] = f16(pos_f32[d]);
+        }
     }
 
     // ENTROPY EXTRACTION (at high temperature)
