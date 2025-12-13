@@ -4,7 +4,8 @@ use bytemuck::{Pod, Zeroable};
 use half::f16;
 
 /// Maximum dimensions supported (for network weights, images, etc.)
-pub const MAX_DIMENSIONS: usize = 1024;
+/// 4096 supports 32x32 RGB images (3072 dims) or 64x64 grayscale (4096 dims)
+pub const MAX_DIMENSIONS: usize = 4096;
 
 /// Maximum particles supported (GPU memory dependent)
 pub const MAX_PARTICLES: usize = 500_000;
@@ -67,13 +68,19 @@ pub enum LossFunction {
     Schwefel = 9,
     /// Custom expression-based loss function
     Custom = 10,
+    /// Product of cosines, min at origin
+    Griewank = 11,
+    /// Multimodal with sin² terms, min at (1,1,...,1)
+    Levy = 12,
+    /// Simple polynomial, min at (-2.903534, ..., -2.903534)
+    StyblinskiTang = 13,
 }
 
 /// Particle state in the thermodynamic system
 ///
 /// Uses f16 for positions to match GPU memory layout directly.
-/// Size: 1024*2 + 4 + 4 = 2056 bytes
-/// MAX_DIMENSIONS=1024 supports networks up to ~1000 parameters or RGB images
+/// Size: 4096*2 + 4 + 4 = 8200 bytes
+/// MAX_DIMENSIONS=4096 supports 32x32 RGB images or 64x64 grayscale
 ///
 /// To convert positions to f32 for computation: `p.pos[d].to_f32()`
 #[repr(C)]

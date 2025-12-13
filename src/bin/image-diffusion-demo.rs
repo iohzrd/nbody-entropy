@@ -252,7 +252,7 @@ fn generate_checkerboard_pattern() -> Vec<f32> {
 fn generate_circle_wgsl() -> temper::expr::Expr {
     // Use unclamped MSE so gradients work everywhere (not just in [0,1])
     let loss_code = r#"
-fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
+fn custom_loss(pos: array<f32, 4096>, dim: u32) -> f32 {
     let size = 16.0;
     let center = size / 2.0;
     let radius = size / 3.0;
@@ -278,7 +278,7 @@ fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
 "#;
 
     let grad_code = r#"
-fn custom_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
+fn custom_gradient(pos: array<f32, 4096>, dim: u32, d_idx: u32) -> f32 {
     let size = 16.0;
     let center = size / 2.0;
     let radius = size / 3.0;
@@ -304,7 +304,7 @@ fn custom_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
 /// Generate WGSL for cross pattern MSE loss
 fn generate_cross_wgsl() -> temper::expr::Expr {
     let loss_code = r#"
-fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
+fn custom_loss(pos: array<f32, 4096>, dim: u32) -> f32 {
     var mse = 0.0;
     for (var i = 0u; i < 256u; i = i + 1u) {
         let y = i / 16u;
@@ -326,7 +326,7 @@ fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
 "#;
 
     let grad_code = r#"
-fn custom_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
+fn custom_gradient(pos: array<f32, 4096>, dim: u32, d_idx: u32) -> f32 {
     let y = d_idx / 16u;
     let x = d_idx % 16u;
 
@@ -347,7 +347,7 @@ fn custom_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
 /// Generate WGSL for checkerboard pattern MSE loss
 fn generate_checkerboard_wgsl() -> temper::expr::Expr {
     let loss_code = r#"
-fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
+fn custom_loss(pos: array<f32, 4096>, dim: u32) -> f32 {
     var mse = 0.0;
     for (var i = 0u; i < 256u; i = i + 1u) {
         let y = i / 16u;
@@ -369,7 +369,7 @@ fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
 "#;
 
     let grad_code = r#"
-fn custom_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
+fn custom_gradient(pos: array<f32, 4096>, dim: u32, d_idx: u32) -> f32 {
     let y = d_idx / 16u;
     let x = d_idx % 16u;
 
@@ -391,7 +391,7 @@ fn custom_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
 fn generate_mixture_wgsl() -> temper::expr::Expr {
     let loss_code = r#"
 // Compute MSE to circle pattern (unclamped)
-fn mse_circle(pos: array<f32, 1024>) -> f32 {
+fn mse_circle(pos: array<f32, 4096>) -> f32 {
     let size = 16.0;
     let center = size / 2.0;
     let radius = size / 3.0;
@@ -413,7 +413,7 @@ fn mse_circle(pos: array<f32, 1024>) -> f32 {
 }
 
 // Compute MSE to cross pattern (unclamped)
-fn mse_cross(pos: array<f32, 1024>) -> f32 {
+fn mse_cross(pos: array<f32, 4096>) -> f32 {
     var mse = 0.0;
     for (var i = 0u; i < 256u; i = i + 1u) {
         let y = i / 16u;
@@ -432,7 +432,7 @@ fn mse_cross(pos: array<f32, 1024>) -> f32 {
     return mse / 256.0;
 }
 
-fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
+fn custom_loss(pos: array<f32, 4096>, dim: u32) -> f32 {
     // Return minimum MSE (particle can converge to either pattern)
     let e_circle = mse_circle(pos);
     let e_cross = mse_cross(pos);
@@ -468,7 +468,7 @@ fn cross_goal(i: u32) -> f32 {
     return 0.0;
 }
 
-fn mse_circle_val(pos: array<f32, 1024>) -> f32 {
+fn mse_circle_val(pos: array<f32, 4096>) -> f32 {
     var mse = 0.0;
     for (var i = 0u; i < 256u; i = i + 1u) {
         let diff = pos[i] - circle_goal(i);
@@ -477,7 +477,7 @@ fn mse_circle_val(pos: array<f32, 1024>) -> f32 {
     return mse / 256.0;
 }
 
-fn mse_cross_val(pos: array<f32, 1024>) -> f32 {
+fn mse_cross_val(pos: array<f32, 4096>) -> f32 {
     var mse = 0.0;
     for (var i = 0u; i < 256u; i = i + 1u) {
         let diff = pos[i] - cross_goal(i);
@@ -486,7 +486,7 @@ fn mse_cross_val(pos: array<f32, 1024>) -> f32 {
     return mse / 256.0;
 }
 
-fn custom_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
+fn custom_gradient(pos: array<f32, 4096>, dim: u32, d_idx: u32) -> f32 {
     // Gradient toward whichever pattern is closer
     let e_circle = mse_circle_val(pos);
     let e_cross = mse_cross_val(pos);

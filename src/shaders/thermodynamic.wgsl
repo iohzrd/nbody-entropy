@@ -13,10 +13,10 @@
 // Enable f16 support for reduced memory bandwidth (~50% memory reduction)
 enable f16;
 
-// MAX_DIMENSIONS = 1024 for large networks and RGB images
-// Struct size: 1024*2 + 4 + 4 = 2056 bytes
+// MAX_DIMENSIONS = 4096 for 32x32 RGB images or 64x64 grayscale
+// Struct size: 4096*2 + 4 + 4 = 8200 bytes
 struct Particle {
-    pos: array<f16, 1024>,    // Position in parameter space (NN weights) - f16 for bandwidth
+    pos: array<f16, 4096>,    // Position in parameter space (NN weights) - f16 for bandwidth
     energy: f32,             // Current loss/energy value (f32 for precision)
     entropy_bits: u32,       // Accumulated entropy bits (for extraction)
 }
@@ -27,8 +27,8 @@ fn get_pos(p: Particle, d: u32) -> f32 {
 }
 
 // Helper to get position array as f32 for loss functions
-fn get_pos_array(p: Particle, dim: u32) -> array<f32, 1024> {
-    var result: array<f32, 1024>;
+fn get_pos_array(p: Particle, dim: u32) -> array<f32, 4096> {
+    var result: array<f32, 4096>;
     for (var i = 0u; i < dim; i = i + 1u) {
         result[i] = f32(p.pos[i]);
     }
@@ -177,7 +177,7 @@ fn fast_cos_f16(x: f16) -> f16 {
 
 // Stub functions for custom expressions - these are overridden when using with_expr()
 // They must exist for the shader to compile even when LossFunction::Custom isn't used
-fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
+fn custom_loss(pos: array<f32, 4096>, dim: u32) -> f32 {
     // Default: sphere function
     var sum = 0.0;
     for (var i = 0u; i < dim; i = i + 1u) {
@@ -186,7 +186,7 @@ fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
     return sum;
 }
 
-fn custom_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
+fn custom_gradient(pos: array<f32, 4096>, dim: u32, d_idx: u32) -> f32 {
     // Numerical gradient
     let eps = 0.001;
     var pos_plus = pos;
@@ -226,7 +226,7 @@ fn nn_gradient_2d(w1: f32, w2: f32) -> vec2<f32> {
 // N-dimensional multimodal loss function
 // Has 2^(dim/2) global minima at combinations of ±1.5 in each pair of dimensions
 // This generalizes the 2D neural net's two minima to higher dimensions
-fn multimodal_loss_nd(pos: array<f32, 1024>, dim: u32) -> f32 {
+fn multimodal_loss_nd(pos: array<f32, 4096>, dim: u32) -> f32 {
     var loss = 0.0;
     // Sum over pairs of dimensions
     for (var d = 0u; d < dim; d = d + 2u) {
@@ -246,7 +246,7 @@ fn multimodal_loss_nd(pos: array<f32, 1024>, dim: u32) -> f32 {
 }
 
 // Gradient of N-dimensional multimodal loss
-fn multimodal_gradient_nd(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
+fn multimodal_gradient_nd(pos: array<f32, 4096>, dim: u32, d_idx: u32) -> f32 {
     let pair_idx = d_idx / 2u;
     let in_pair = d_idx % 2u;
     let d_base = pair_idx * 2u;
@@ -304,7 +304,7 @@ fn sigmoid(x: f32) -> f32 {
     return 1.0 / (1.0 + exp(-x));
 }
 
-fn mlp_xor_forward(pos: array<f32, 1024>, input: vec2<f32>) -> f32 {
+fn mlp_xor_forward(pos: array<f32, 4096>, input: vec2<f32>) -> f32 {
     // Layer 1: input (2) -> hidden (2) with tanh
     let h0 = tanh(pos[0] * input.x + pos[1] * input.y + pos[4]);
     let h1 = tanh(pos[2] * input.x + pos[3] * input.y + pos[5]);
@@ -314,7 +314,7 @@ fn mlp_xor_forward(pos: array<f32, 1024>, input: vec2<f32>) -> f32 {
     return out;
 }
 
-fn mlp_xor_loss(pos: array<f32, 1024>) -> f32 {
+fn mlp_xor_loss(pos: array<f32, 4096>) -> f32 {
     var total_loss = 0.0;
     for (var i = 0u; i < 4u; i = i + 1u) {
         let pred = mlp_xor_forward(pos, XOR_X[i]);
@@ -327,7 +327,7 @@ fn mlp_xor_loss(pos: array<f32, 1024>) -> f32 {
     return total_loss / 4.0;
 }
 
-fn mlp_xor_gradient(pos: array<f32, 1024>, d_idx: u32) -> f32 {
+fn mlp_xor_gradient(pos: array<f32, 4096>, d_idx: u32) -> f32 {
     // Numerical gradient (more stable for complex networks)
     let eps = 0.001;
     var pos_plus = pos;
@@ -349,7 +349,7 @@ fn spiral_point(idx: u32, cls: u32) -> vec2<f32> {
     return vec2<f32>(r * fast_cos(theta), r * fast_sin(theta));
 }
 
-fn mlp_spiral_loss(pos: array<f32, 1024>) -> f32 {
+fn mlp_spiral_loss(pos: array<f32, 4096>) -> f32 {
     var total_loss = 0.0;
 
     // Sample points from both spirals
@@ -371,7 +371,7 @@ fn mlp_spiral_loss(pos: array<f32, 1024>) -> f32 {
     return total_loss / f32(2u * SPIRAL_SIZE);
 }
 
-fn mlp_spiral_gradient(pos: array<f32, 1024>, d_idx: u32) -> f32 {
+fn mlp_spiral_gradient(pos: array<f32, 4096>, d_idx: u32) -> f32 {
     let eps = 0.001;
     var pos_plus = pos;
     var pos_minus = pos;
@@ -403,7 +403,7 @@ fn circles_point(idx: u32, cls: u32) -> vec2<f32> {
     return vec2<f32>((r + noise) * cos(theta), (r + noise) * sin(theta));
 }
 
-fn mlp_deep_forward(pos: array<f32, 1024>, input: vec2<f32>) -> f32 {
+fn mlp_deep_forward(pos: array<f32, 4096>, input: vec2<f32>) -> f32 {
     // Layer 1: input (2) -> hidden1 (4) with tanh
     // W1 is stored as [w00, w01, w10, w11, w20, w21, w30, w31] (4 neurons x 2 inputs)
     let h1_0 = tanh(pos[0] * input.x + pos[1] * input.y + pos[8]);
@@ -424,7 +424,7 @@ fn mlp_deep_forward(pos: array<f32, 1024>, input: vec2<f32>) -> f32 {
     return out;
 }
 
-fn mlp_deep_loss(pos: array<f32, 1024>) -> f32 {
+fn mlp_deep_loss(pos: array<f32, 4096>) -> f32 {
     var total_loss = 0.0;
 
     // Sample points from both circles
@@ -446,7 +446,7 @@ fn mlp_deep_loss(pos: array<f32, 1024>) -> f32 {
     return total_loss / f32(2u * CIRCLES_SIZE);
 }
 
-fn mlp_deep_gradient(pos: array<f32, 1024>, d_idx: u32) -> f32 {
+fn mlp_deep_gradient(pos: array<f32, 4096>, d_idx: u32) -> f32 {
     // Only compute gradient for active parameters
     if d_idx >= DEEP_DIM {
         return 0.0;
@@ -466,7 +466,7 @@ fn mlp_deep_gradient(pos: array<f32, 1024>, d_idx: u32) -> f32 {
 // Rosenbrock function (N-dimensional)
 // Global minimum: f(1,1,...,1) = 0
 // Famous "banana valley" - tests ability to follow narrow curved valleys
-fn rosenbrock_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
+fn rosenbrock_loss(pos: array<f32, 4096>, dim: u32) -> f32 {
     var sum = 0.0;
     for (var i = 0u; i < dim - 1u; i = i + 1u) {
         let x_i = pos[i];
@@ -476,7 +476,7 @@ fn rosenbrock_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
     return sum;
 }
 
-fn rosenbrock_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
+fn rosenbrock_gradient(pos: array<f32, 4096>, dim: u32, d_idx: u32) -> f32 {
     var grad = 0.0;
     let x_i = pos[d_idx];
 
@@ -498,7 +498,7 @@ fn rosenbrock_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
 // Rastrigin function (N-dimensional)
 // Global minimum: f(0,0,...,0) = 0
 // Highly multimodal with regular grid of local minima - tests global search
-fn rastrigin_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
+fn rastrigin_loss(pos: array<f32, 4096>, dim: u32) -> f32 {
     var sum = 10.0 * f32(dim);
     for (var i = 0u; i < dim; i = i + 1u) {
         let x = pos[i];
@@ -507,7 +507,7 @@ fn rastrigin_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
     return sum;
 }
 
-fn rastrigin_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
+fn rastrigin_gradient(pos: array<f32, 4096>, dim: u32, d_idx: u32) -> f32 {
     let x = pos[d_idx];
     return 2.0 * x + 20.0 * PI * fast_sin(TWO_PI * x);
 }
@@ -515,7 +515,7 @@ fn rastrigin_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
 // Ackley function (N-dimensional)
 // Global minimum: f(0,0,...,0) = 0
 // Nearly flat outer region with deep hole at center - tests exploitation
-fn ackley_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
+fn ackley_loss(pos: array<f32, 4096>, dim: u32) -> f32 {
     let a = 20.0;
     let b = 0.2;
 
@@ -532,7 +532,7 @@ fn ackley_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
     return -a * fast_exp(-b * sqrt_term) - fast_exp(sum_cos / n) + a + 2.71828182845;
 }
 
-fn ackley_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
+fn ackley_gradient(pos: array<f32, 4096>, dim: u32, d_idx: u32) -> f32 {
     let a = 20.0;
     let b = 0.2;
 
@@ -562,7 +562,7 @@ fn ackley_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
 
 // Sphere function (N-dimensional) - simple convex baseline
 // Global minimum: f(0,0,...,0) = 0
-fn sphere_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
+fn sphere_loss(pos: array<f32, 4096>, dim: u32) -> f32 {
     var sum = 0.0;
     for (var i = 0u; i < dim; i = i + 1u) {
         sum = sum + pos[i] * pos[i];
@@ -570,14 +570,14 @@ fn sphere_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
     return sum;
 }
 
-fn sphere_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
+fn sphere_gradient(pos: array<f32, 4096>, dim: u32, d_idx: u32) -> f32 {
     return 2.0 * pos[d_idx];
 }
 
 // Schwefel function (N-dimensional) - deceptive global minimum far from origin
 // Global minimum: f(420.9687, ..., 420.9687) = 0
 // The global minimum is far from the origin, and local minima are deceptive
-fn schwefel_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
+fn schwefel_loss(pos: array<f32, 4096>, dim: u32) -> f32 {
     var sum = 0.0;
     for (var i = 0u; i < dim; i = i + 1u) {
         let x = pos[i];
@@ -586,7 +586,7 @@ fn schwefel_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
     return 418.9829 * f32(dim) - sum;
 }
 
-fn schwefel_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
+fn schwefel_gradient(pos: array<f32, 4096>, dim: u32, d_idx: u32) -> f32 {
     let x = pos[d_idx];
     let abs_x = abs(x);
 
@@ -603,6 +603,82 @@ fn schwefel_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
 
     // Negative because schwefel_loss = 418.9829*n - sum
     return -grad;
+}
+
+// Griewank function (N-dimensional)
+// Global minimum: f(0, 0, ..., 0) = 0
+// f(x) = 1 + sum(x_i^2 / 4000) - prod(cos(x_i / sqrt(i+1)))
+fn griewank_loss(pos: array<f32, 4096>, dim: u32) -> f32 {
+    var sum_term = 0.0;
+    var prod_term = 1.0;
+    for (var i = 0u; i < dim; i = i + 1u) {
+        let x = pos[i];
+        sum_term = sum_term + x * x / 4000.0;
+        prod_term = prod_term * fast_cos(x / fast_sqrt(f32(i + 1u)));
+    }
+    return 1.0 + sum_term - prod_term;
+}
+
+fn griewank_gradient(pos: array<f32, 4096>, dim: u32, d_idx: u32) -> f32 {
+    // Numerical gradient for product term complexity
+    let eps = 0.001;
+    var pos_plus = pos;
+    var pos_minus = pos;
+    pos_plus[d_idx] = pos[d_idx] + eps;
+    pos_minus[d_idx] = pos[d_idx] - eps;
+    return (griewank_loss(pos_plus, dim) - griewank_loss(pos_minus, dim)) / (2.0 * eps);
+}
+
+// Levy function (N-dimensional)
+// Global minimum: f(1, 1, ..., 1) = 0
+// w_i = 1 + (x_i - 1) / 4
+// f(x) = sin²(πw_1) + sum[(w_i-1)²(1+10sin²(πw_i+1))] + (w_n-1)²(1+sin²(2πw_n))
+fn levy_loss(pos: array<f32, 4096>, dim: u32) -> f32 {
+    let w0 = 1.0 + (pos[0] - 1.0) / 4.0;
+    let wn = 1.0 + (pos[dim - 1u] - 1.0) / 4.0;
+
+    let sin_pw0 = fast_sin(PI * w0);
+    var sum = sin_pw0 * sin_pw0;
+
+    for (var i = 0u; i < dim - 1u; i = i + 1u) {
+        let w = 1.0 + (pos[i] - 1.0) / 4.0;
+        let w_next = 1.0 + (pos[i + 1u] - 1.0) / 4.0;
+        let sin_term = fast_sin(PI * w_next);
+        sum = sum + (w - 1.0) * (w - 1.0) * (1.0 + 10.0 * sin_term * sin_term);
+    }
+
+    let sin_2pwn = fast_sin(TWO_PI * wn);
+    sum = sum + (wn - 1.0) * (wn - 1.0) * (1.0 + sin_2pwn * sin_2pwn);
+
+    return sum;
+}
+
+fn levy_gradient(pos: array<f32, 4096>, dim: u32, d_idx: u32) -> f32 {
+    let eps = 0.001;
+    var pos_plus = pos;
+    var pos_minus = pos;
+    pos_plus[d_idx] = pos[d_idx] + eps;
+    pos_minus[d_idx] = pos[d_idx] - eps;
+    return (levy_loss(pos_plus, dim) - levy_loss(pos_minus, dim)) / (2.0 * eps);
+}
+
+// Styblinski-Tang function (N-dimensional)
+// Global minimum: f(-2.903534, ..., -2.903534) ≈ -39.16599 * n
+// f(x) = 0.5 * sum(x_i^4 - 16*x_i^2 + 5*x_i)
+fn styblinski_tang_loss(pos: array<f32, 4096>, dim: u32) -> f32 {
+    var sum = 0.0;
+    for (var i = 0u; i < dim; i = i + 1u) {
+        let x = pos[i];
+        let x2 = x * x;
+        sum = sum + x2 * x2 - 16.0 * x2 + 5.0 * x;
+    }
+    return 0.5 * sum;
+}
+
+fn styblinski_tang_gradient(pos: array<f32, 4096>, dim: u32, d_idx: u32) -> f32 {
+    let x = pos[d_idx];
+    // d/dx [0.5 * (x^4 - 16x^2 + 5x)] = 0.5 * (4x^3 - 32x + 5) = 2x^3 - 16x + 2.5
+    return 2.0 * x * x * x - 16.0 * x + 2.5;
 }
 
 // ============================================================================
@@ -628,7 +704,7 @@ fn compute_repulsion(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let h_sq = uniforms.kernel_bandwidth * uniforms.kernel_bandwidth;
 
     // Accumulate repulsion in f32 for precision
-    var rep: array<f32, 1024>;
+    var rep: array<f32, 4096>;
     for (var d = 0u; d < 256u; d = d + 1u) {
         rep[d] = 0.0;
     }
@@ -735,6 +811,18 @@ fn update_particles(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Custom expression-based loss function (injected at shader compile time)
             p.energy = custom_loss(pos_f32, uniforms.dim);
         }
+        case 11u: {
+            // Griewank
+            p.energy = griewank_loss(pos_f32, uniforms.dim);
+        }
+        case 12u: {
+            // Levy
+            p.energy = levy_loss(pos_f32, uniforms.dim);
+        }
+        case 13u: {
+            // Styblinski-Tang
+            p.energy = styblinski_tang_loss(pos_f32, uniforms.dim);
+        }
         default: {
             p.energy = nn_loss_2d(pos_f32[0], pos_f32[1]);
             loss_grad_2d = nn_gradient_2d(pos_f32[0], pos_f32[1]);
@@ -814,6 +902,18 @@ fn update_particles(@builtin(global_invocation_id) global_id: vec3<u32>) {
             case 10u: {
                 // Custom expression-based gradient
                 grad = custom_gradient(pos_f32, uniforms.dim, d);
+            }
+            case 11u: {
+                // Griewank
+                grad = griewank_gradient(pos_f32, uniforms.dim, d);
+            }
+            case 12u: {
+                // Levy
+                grad = levy_gradient(pos_f32, uniforms.dim, d);
+            }
+            case 13u: {
+                // Styblinski-Tang
+                grad = styblinski_tang_gradient(pos_f32, uniforms.dim, d);
             }
             default: {
                 if d == 0u {

@@ -36,6 +36,8 @@ cargo run --release --features gpu --bin optimizer-comparison
 # Demos
 cargo run --release --features gpu --bin mode-discovery        # Find all modes
 cargo run --release --features gpu --bin bayesian-uncertainty  # Uncertainty quantification
+cargo run --release --features gpu --bin rgb-image-diffusion   # 16x16 RGB image generation
+cargo run --release --features gpu --bin image-inpainting      # 32x32 image inpainting
 ```
 
 See [bin/README.md](src/bin/README.md) for full list.
@@ -90,13 +92,14 @@ system.set_repulsion_samples(64);  // Sample 64 particles (default)
 
 - **Optimization**: Simulated annealing, adaptive cooling with reheat, parallel tempering
 - **Sampling**: SVGD-based posterior sampling, uncertainty quantification
-- **Entropy**: High-temperature mode for randomness extraction, implements `RngCore`
-- **GPU**: wgpu-based, O(nK) repulsion subsampling
+- **Entropy**: High-temperature mode passes dieharder statistical tests, implements `RngCore`
+- **GPU**: wgpu-based, O(nK) repulsion subsampling, supports up to 4096 dimensions
 - **Expression DSL**: Custom loss functions compile to WGSL
+- **Image Generation**: 16x16 and 32x32 RGB image diffusion and inpainting
 
 ### Built-in Loss Functions
 
-Sphere, Rosenbrock, Rastrigin, Ackley, Schwefel, MLP-XOR (9 params), MLP-Deep (37 params)
+Sphere, Rosenbrock, Rastrigin, Ackley, Schwefel, Griewank, Levy, Styblinski-Tang, MLP-XOR (9 params), MLP-Deep (37 params)
 
 ## Architecture
 

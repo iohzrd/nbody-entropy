@@ -292,7 +292,7 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (f32, f32, f32) {
 /// Generate WGSL for red circle on blue background
 fn generate_red_circle_wgsl() -> temper::expr::Expr {
     let loss_code = r#"
-fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
+fn custom_loss(pos: array<f32, 4096>, dim: u32) -> f32 {
     let size = 16.0;
     let center = size / 2.0;
     let radius = size / 3.0;
@@ -327,7 +327,7 @@ fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
 "#;
 
     let grad_code = r#"
-fn custom_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
+fn custom_gradient(pos: array<f32, 4096>, dim: u32, d_idx: u32) -> f32 {
     if d_idx >= 768u {
         return 0.0;
     }
@@ -410,7 +410,7 @@ fn hsv_to_b(h: f32) -> f32 {
     return 1.0 - f;
 }
 
-fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
+fn custom_loss(pos: array<f32, 4096>, dim: u32) -> f32 {
     var mse = 0.0;
     for (var i = 0u; i < 256u; i = i + 1u) {
         let x = i % 16u;
@@ -430,7 +430,7 @@ fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
 "#;
 
     let grad_code = r#"
-fn custom_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
+fn custom_gradient(pos: array<f32, 4096>, dim: u32, d_idx: u32) -> f32 {
     if d_idx >= 768u {
         return 0.0;
     }
@@ -459,7 +459,7 @@ fn custom_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
 /// Generate WGSL for red/green checkerboard
 fn generate_color_checkerboard_wgsl() -> temper::expr::Expr {
     let loss_code = r#"
-fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
+fn custom_loss(pos: array<f32, 4096>, dim: u32) -> f32 {
     var mse = 0.0;
     for (var i = 0u; i < 256u; i = i + 1u) {
         let y = i / 16u;
@@ -487,7 +487,7 @@ fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
 "#;
 
     let grad_code = r#"
-fn custom_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
+fn custom_gradient(pos: array<f32, 4096>, dim: u32, d_idx: u32) -> f32 {
     if d_idx >= 768u {
         return 0.0;
     }
@@ -521,7 +521,7 @@ fn custom_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
 /// Generate WGSL for concentric color rings
 fn generate_color_rings_wgsl() -> temper::expr::Expr {
     let loss_code = r#"
-fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
+fn custom_loss(pos: array<f32, 4096>, dim: u32) -> f32 {
     let size = 16.0;
     let center = size / 2.0;
 
@@ -549,7 +549,7 @@ fn custom_loss(pos: array<f32, 1024>, dim: u32) -> f32 {
 "#;
 
     let grad_code = r#"
-fn custom_gradient(pos: array<f32, 1024>, dim: u32, d_idx: u32) -> f32 {
+fn custom_gradient(pos: array<f32, 4096>, dim: u32, d_idx: u32) -> f32 {
     if d_idx >= 768u {
         return 0.0;
     }
